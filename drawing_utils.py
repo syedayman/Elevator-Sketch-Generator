@@ -8,7 +8,11 @@ from matplotlib.patches import Rectangle, FancyArrowPatch, Polygon, Circle
 from matplotlib.lines import Line2D
 from typing import Tuple, Optional, List
 
-from . import config
+# Support both package (relative) and standalone (absolute) imports
+try:
+    from . import config
+except ImportError:
+    import config
 
 
 def draw_wall_section(

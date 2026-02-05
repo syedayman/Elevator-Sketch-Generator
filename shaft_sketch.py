@@ -12,26 +12,49 @@ import matplotlib
 matplotlib.use('Agg')  # Non-interactive backend for PNG generation
 from matplotlib.patches import Rectangle
 
-from . import config
-from .drawing_utils import (
-    draw_wall_section,
-    draw_opening,
-    draw_dimension_line,
-    draw_centerline,
-    draw_shaft_interior,
-    draw_title_block,
-    draw_steel_beam,
-    draw_counterweight_bracket,
-    draw_car_bracket,
-    draw_car_bracket_cw_side,
-    draw_lift_car,
-    draw_door_panels,
-    draw_car_interior_details,
-    draw_lift_doors,
-    draw_door_jambs,
-    draw_counterweight_bracket_top,
-    draw_car_brackets_mra,
-)
+# Support both package (relative) and standalone (absolute) imports
+try:
+    from . import config
+    from .drawing_utils import (
+        draw_wall_section,
+        draw_opening,
+        draw_dimension_line,
+        draw_centerline,
+        draw_shaft_interior,
+        draw_title_block,
+        draw_steel_beam,
+        draw_counterweight_bracket,
+        draw_car_bracket,
+        draw_car_bracket_cw_side,
+        draw_lift_car,
+        draw_door_panels,
+        draw_car_interior_details,
+        draw_lift_doors,
+        draw_door_jambs,
+        draw_counterweight_bracket_top,
+        draw_car_brackets_mra,
+    )
+except ImportError:
+    import config
+    from drawing_utils import (
+        draw_wall_section,
+        draw_opening,
+        draw_dimension_line,
+        draw_centerline,
+        draw_shaft_interior,
+        draw_title_block,
+        draw_steel_beam,
+        draw_counterweight_bracket,
+        draw_car_bracket,
+        draw_car_bracket_cw_side,
+        draw_lift_car,
+        draw_door_panels,
+        draw_car_interior_details,
+        draw_lift_doors,
+        draw_door_jambs,
+        draw_counterweight_bracket_top,
+        draw_car_brackets_mra,
+    )
 
 
 # Fire lift fixed cabin sizes (Width x Depth in mm)
@@ -62,6 +85,9 @@ class LiftConfig:
     mra_car_bracket_width: float = field(default_factory=lambda: config.MRA_CAR_BRACKET_WIDTH)
     mra_cw_bracket_depth: float = field(default_factory=lambda: config.MRA_CW_BRACKET_DEPTH)
 
+    # MRL shaft depth override (MRL only - no bracket controls depth)
+    shaft_depth_override: Optional[float] = None
+
     # Shaft dimensions
     shaft_depth: float = field(default_factory=lambda: config.DEFAULT_SHAFT_DEPTH)
     wall_thickness: float = field(default_factory=lambda: config.DEFAULT_WALL_THICKNESS)
@@ -71,6 +97,10 @@ class LiftConfig:
     door_height: float = field(default_factory=lambda: config.DEFAULT_DOOR_HEIGHT)
     structural_opening_width: float = field(default_factory=lambda: config.DEFAULT_STRUCTURAL_OPENING_WIDTH)
     structural_opening_height: float = field(default_factory=lambda: config.DEFAULT_STRUCTURAL_OPENING_HEIGHT)
+
+    # Door panel dimensions (affects shaft depth calculation)
+    door_panel_thickness: float = field(default_factory=lambda: config.DEFAULT_LIFT_DOOR_THICKNESS)
+    door_extension: float = field(default_factory=lambda: config.DEFAULT_DOOR_EXTENSION)
 
     @property
     def unfinished_car_width(self) -> float:
@@ -83,25 +113,42 @@ class LiftConfig:
         return self.finished_car_depth + config.DEFAULT_CAR_WALL_THICKNESS
 
     @property
-    def shaft_width(self) -> float:
-        """
-        Calculate shaft width from components.
-
-        MRL: shaft_width = counterweight_bracket + unfinished_car_width + car_bracket
-        MRA: shaft_width = unfinished_car_width + 2 × car_bracket (brackets on both sides)
-
-        Fire lifts enforce a minimum shaft width of 2700mm.
-        """
+    def min_shaft_width(self) -> float:
+        """Calculate minimum shaft width from car + brackets."""
         if self.lift_machine_type == "mra":
             width = self.unfinished_car_width + 2 * self.mra_car_bracket_width
         else:
             width = self.counterweight_bracket_width + self.unfinished_car_width + self.car_bracket_width
-
-        # Fire lifts have minimum shaft width requirement
         if self.lift_type == "fire":
             width = max(width, config.FIRE_LIFT_MIN_SHAFT_WIDTH)
-
         return width
+
+    @property
+    def min_shaft_depth(self) -> float:
+        """Calculate minimum shaft depth from car + doors + clearances."""
+        if self.lift_machine_type == "mra":
+            return (2 * self.door_panel_thickness + config.DEFAULT_DOOR_GAP
+                    + self.unfinished_car_depth + config.MRA_CW_GAP + self.mra_cw_bracket_depth)
+        else:
+            return (self.unfinished_car_depth + 2 * self.door_panel_thickness
+                    + config.DEFAULT_DOOR_GAP + config.DEFAULT_REAR_CLEARANCE)
+
+    @property
+    def shaft_width(self) -> float:
+        """Calculate shaft width from car + brackets."""
+        return self.min_shaft_width
+
+    @property
+    def effective_shaft_depth(self) -> float:
+        """
+        Return shaft depth (override or calculated minimum).
+
+        For MRL: uses shaft_depth_override if set, otherwise min_shaft_depth.
+        For MRA: always uses min_shaft_depth (controlled by mra_cw_bracket_depth).
+        """
+        if self.lift_machine_type == "mrl" and self.shaft_depth_override is not None:
+            return self.shaft_depth_override
+        return self.min_shaft_depth
 
     def __post_init__(self):
         """Validate and configure fire lift settings."""
@@ -116,6 +163,36 @@ class LiftConfig:
                 )
             # Set fire lift door width
             self.door_width = config.FIRE_LIFT_DOOR_WIDTH
+
+        # Validate bracket dimensions meet minimums (defaults are the minimums)
+        if self.lift_machine_type == "mrl":
+            if self.counterweight_bracket_width < config.DEFAULT_COUNTERWEIGHT_BRACKET_WIDTH:
+                raise ValueError(
+                    f"CW Bracket Width ({int(self.counterweight_bracket_width)}mm) is below minimum "
+                    f"({config.DEFAULT_COUNTERWEIGHT_BRACKET_WIDTH}mm)."
+                )
+            if self.car_bracket_width < config.DEFAULT_CAR_BRACKET_WIDTH:
+                raise ValueError(
+                    f"Car Bracket Width ({int(self.car_bracket_width)}mm) is below minimum "
+                    f"({config.DEFAULT_CAR_BRACKET_WIDTH}mm)."
+                )
+            # Validate MRL shaft depth override
+            if self.shaft_depth_override is not None and self.shaft_depth_override < self.min_shaft_depth:
+                raise ValueError(
+                    f"Shaft Depth ({int(self.shaft_depth_override)}mm) is below minimum "
+                    f"({int(self.min_shaft_depth)}mm)."
+                )
+        else:  # MRA
+            if self.mra_car_bracket_width < config.MRA_CAR_BRACKET_WIDTH:
+                raise ValueError(
+                    f"Car Bracket Width ({int(self.mra_car_bracket_width)}mm) is below minimum "
+                    f"({config.MRA_CAR_BRACKET_WIDTH}mm)."
+                )
+            if self.mra_cw_bracket_depth < config.MRA_CW_BRACKET_DEPTH:
+                raise ValueError(
+                    f"CW Bracket Depth ({int(self.mra_cw_bracket_depth)}mm) is below minimum "
+                    f"({config.MRA_CW_BRACKET_DEPTH}mm)."
+                )
 
 
 def validate_fire_lift_positions(lifts: List[LiftConfig]) -> None:
@@ -245,30 +322,8 @@ class LiftShaftSketch:
             # Validate fire lift positions (must be at position 0)
             validate_fire_lift_positions(lifts)
 
-            # Calculate per-lift shaft depths
-            self._shaft_depths = []
-            for lift in lifts:
-                if lift.shaft_depth and lift.shaft_depth != config.DEFAULT_SHAFT_DEPTH:
-                    # User provided explicit shaft depth for this lift
-                    depth = lift.shaft_depth
-                elif lift.lift_machine_type == "mra":
-                    # MRA formula: shaft_depth = door_area + car_depth + gap + cw_bracket_depth
-                    depth = (
-                        2 * config.DEFAULT_LIFT_DOOR_THICKNESS    # 300mm (landing + car door)
-                        + config.DEFAULT_DOOR_GAP                  # 30mm (gap between doors)
-                        + lift.unfinished_car_depth                # car depth
-                        + config.MRA_CW_GAP                        # 100mm (gap between car and CW bracket)
-                        + lift.mra_cw_bracket_depth                # CW bracket at top
-                    )
-                else:
-                    # MRL formula: d3 = d1 + 2×dt + rcl + rear_clearance
-                    depth = (
-                        lift.unfinished_car_depth
-                        + 2 * config.DEFAULT_LIFT_DOOR_THICKNESS  # 2×150mm (landing + car door)
-                        + config.DEFAULT_DOOR_GAP                  # 30mm (running clearance)
-                        + config.DEFAULT_REAR_CLEARANCE            # 345mm (default rear clearance)
-                    )
-                self._shaft_depths.append(depth)
+            # Calculate per-lift shaft depths (uses effective_shaft_depth for MRL override support)
+            self._shaft_depths = [lift.effective_shaft_depth for lift in lifts]
 
             # Max depth for outer envelope (used for total_depth calculation and common shaft)
             if shaft_depth:
@@ -286,7 +341,8 @@ class LiftShaftSketch:
             if self._separator_type == "steel_beam":
                 self.shared_wall_thickness = self.steel_beam_width
             else:
-                self.shared_wall_thickness = shared_wall_thickness or config.DEFAULT_RCC_SEPARATOR_WIDTH
+                # For RCC separators: use explicit shared_wall_thickness, else wall_thickness, else default
+                self.shared_wall_thickness = shared_wall_thickness or self.wall_thickness
 
             # Store individual shaft widths from lift configs
             self._shaft_widths = [lift.shaft_width for lift in lifts]
@@ -299,27 +355,8 @@ class LiftShaftSketch:
                 # Validate fire lift positions in Bank 2
                 validate_fire_lift_positions(lifts_bank2)
 
-                # Calculate per-lift shaft depths for Bank 2
-                self._shaft_depths_bank2 = []
-                for lift in lifts_bank2:
-                    if lift.shaft_depth and lift.shaft_depth != config.DEFAULT_SHAFT_DEPTH:
-                        depth = lift.shaft_depth
-                    elif lift.lift_machine_type == "mra":
-                        depth = (
-                            2 * config.DEFAULT_LIFT_DOOR_THICKNESS
-                            + config.DEFAULT_DOOR_GAP
-                            + lift.unfinished_car_depth
-                            + config.MRA_CW_GAP
-                            + lift.mra_cw_bracket_depth
-                        )
-                    else:
-                        depth = (
-                            lift.unfinished_car_depth
-                            + 2 * config.DEFAULT_LIFT_DOOR_THICKNESS
-                            + config.DEFAULT_DOOR_GAP
-                            + config.DEFAULT_REAR_CLEARANCE
-                        )
-                    self._shaft_depths_bank2.append(depth)
+                # Calculate per-lift shaft depths for Bank 2 (uses effective_shaft_depth for MRL override support)
+                self._shaft_depths_bank2 = [lift.effective_shaft_depth for lift in lifts_bank2]
 
                 self._max_shaft_depth_bank2 = max(self._shaft_depths_bank2)
                 self._shaft_widths_bank2 = [lift.shaft_width for lift in lifts_bank2]
@@ -329,7 +366,8 @@ class LiftShaftSketch:
                 if self._separator_type_bank2 == "steel_beam":
                     self.shared_wall_thickness_bank2 = self.steel_beam_width
                 else:
-                    self.shared_wall_thickness_bank2 = shared_wall_thickness or config.DEFAULT_RCC_SEPARATOR_WIDTH
+                    # For RCC separators: use explicit shared_wall_thickness, else wall_thickness, else default
+                    self.shared_wall_thickness_bank2 = shared_wall_thickness or self.wall_thickness
             else:
                 self.num_lifts_bank2 = 0
                 self._shaft_depths_bank2 = []
@@ -724,6 +762,8 @@ class LiftShaftSketch:
                 center_x=door_center_x,  # Shaft center for fire lifts, car center for others
                 wall_inner_y=shaft_y,  # At y = wall_thickness (inner edge of front wall)
                 door_width=lift_config.door_width,
+                door_extension=lift_config.door_extension,
+                door_thickness=lift_config.door_panel_thickness,
             )
 
         # Draw counterweight bracket only (car bracket not shown)
@@ -856,6 +896,8 @@ class LiftShaftSketch:
                 center_x=car_center_x,
                 wall_inner_y=shaft_y,
                 door_width=lift_config.door_width,
+                door_extension=lift_config.door_extension,
+                door_thickness=lift_config.door_panel_thickness,
             )
 
         # Calculate car position (needed for bracket placement)
@@ -865,8 +907,8 @@ class LiftShaftSketch:
         else:
             car_x = shaft_x + cb_width  # Car starts after left car bracket
         # Position car so bottom touches top of car door (like MRL)
-        # Door area = 2 * door_thickness + door_gap = 330mm
-        car_y = shaft_y + 2 * config.DEFAULT_LIFT_DOOR_THICKNESS + config.DEFAULT_DOOR_GAP
+        # Door area = 2 * door_thickness + door_gap
+        car_y = shaft_y + 2 * lift_config.door_panel_thickness + config.DEFAULT_DOOR_GAP
 
         # Draw brackets (CW at top, car brackets on both sides)
         if display_options["show_brackets"]:
@@ -1234,6 +1276,13 @@ class LiftShaftSketch:
                         wall_start_y = wt + separator_depth + wt  # Below separator's back wall piece
                         wall_height = prev_depth - separator_depth  # Difference in depths
                         draw_wall_section(ax, x_pos, wall_start_y, wt, wall_height, display_options["show_hatching"])
+
+                    # L-shape: If current shaft is deeper, extend current shaft's left wall
+                    if curr_depth > prev_depth:
+                        wall_start_y = wt + separator_depth + wt  # Below separator's back wall piece
+                        wall_height = curr_depth - separator_depth
+                        # Draw on RIGHT side of separator (left wall of current/deeper shaft)
+                        draw_wall_section(ax, x_pos + swt - wt, wall_start_y, wt, wall_height, display_options["show_hatching"])
                 else:
                     # RCC wall with hatching - extends to shallower depth
                     draw_wall_section(ax, x_pos, 0, swt, separator_depth + 2 * wt, display_options["show_hatching"])
@@ -1244,6 +1293,13 @@ class LiftShaftSketch:
                         wall_start_y = separator_depth + 2 * wt  # Below separator
                         wall_height = prev_depth - separator_depth  # Difference in depths
                         draw_wall_section(ax, x_pos, wall_start_y, wt, wall_height, display_options["show_hatching"])
+
+                    # L-shape: If current shaft is deeper, extend current shaft's left wall
+                    if curr_depth > prev_depth:
+                        wall_start_y = separator_depth + 2 * wt  # Below separator
+                        wall_height = curr_depth - separator_depth
+                        # Draw on RIGHT side of separator (left wall of current/deeper shaft)
+                        draw_wall_section(ax, x_pos + swt - wt, wall_start_y, wt, wall_height, display_options["show_hatching"])
 
                 shaft_left = x_pos + swt
 
@@ -1875,6 +1931,12 @@ class LiftShaftSketch:
                             wall_start_y = base_y + wt + separator_depth + wt  # Below separator's back wall
                             wall_height = prev_depth - separator_depth
                             draw_wall_section(ax, x_pos, wall_start_y, wt, wall_height, display_options["show_hatching"])
+
+                        # L-shape: If current shaft is deeper, extend current shaft's left wall
+                        if curr_depth > prev_depth:
+                            wall_start_y = base_y + wt + separator_depth + wt  # Below separator's back wall
+                            wall_height = curr_depth - separator_depth
+                            draw_wall_section(ax, x_pos + swt - wt, wall_start_y, wt, wall_height, display_options["show_hatching"])
                     else:
                         # Mirrored: beam positioned from back (further from front)
                         beam_start_y = base_y + wt + (max_shaft_depth - separator_depth)
@@ -1886,9 +1948,15 @@ class LiftShaftSketch:
 
                         # L-shape: If previous shaft is deeper, continue fire shaft's right wall
                         if prev_depth > curr_depth:
-                            wall_start_y = base_y + wt  # From front wall
-                            wall_height = max_shaft_depth - prev_depth  # Up to fire's back wall
+                            wall_start_y = base_y + (max_shaft_depth - prev_depth)  # Previous's back wall position
+                            wall_height = prev_depth - curr_depth  # Gap to separator
                             draw_wall_section(ax, x_pos, wall_start_y, wt, wall_height, display_options["show_hatching"])
+
+                        # L-shape: If current shaft is deeper, extend current shaft's left wall
+                        if curr_depth > prev_depth:
+                            wall_start_y = base_y + (max_shaft_depth - curr_depth)  # Current's back wall position
+                            wall_height = curr_depth - prev_depth  # Gap to separator
+                            draw_wall_section(ax, x_pos + swt - wt, wall_start_y, wt, wall_height, display_options["show_hatching"])
                 else:
                     # RCC wall - extends to shallower depth
                     if doors_face == "down":
@@ -1899,15 +1967,27 @@ class LiftShaftSketch:
                             wall_start_y = base_y + separator_depth + 2 * wt  # Below separator
                             wall_height = prev_depth - separator_depth
                             draw_wall_section(ax, x_pos, wall_start_y, wt, wall_height, display_options["show_hatching"])
+
+                        # L-shape: If current shaft is deeper, extend current shaft's left wall
+                        if curr_depth > prev_depth:
+                            wall_start_y = base_y + separator_depth + 2 * wt  # Below separator
+                            wall_height = curr_depth - separator_depth
+                            draw_wall_section(ax, x_pos + swt - wt, wall_start_y, wt, wall_height, display_options["show_hatching"])
                     else:
                         wall_start_y = base_y + (max_shaft_depth - separator_depth)
                         draw_wall_section(ax, x_pos, wall_start_y, swt, separator_depth + 2 * wt, display_options["show_hatching"])
 
                         # L-shape: If previous shaft is deeper, continue fire shaft's right wall
                         if prev_depth > curr_depth:
-                            cont_start_y = base_y + wt  # From front wall
-                            cont_height = max_shaft_depth - prev_depth  # Up to fire's back wall position
+                            cont_start_y = base_y + (max_shaft_depth - prev_depth)  # Previous's back wall position
+                            cont_height = prev_depth - curr_depth  # Gap to separator
                             draw_wall_section(ax, x_pos, cont_start_y, wt, cont_height, display_options["show_hatching"])
+
+                        # L-shape: If current shaft is deeper, extend current shaft's left wall
+                        if curr_depth > prev_depth:
+                            cont_start_y = base_y + (max_shaft_depth - curr_depth)  # Current's back wall position
+                            cont_height = curr_depth - prev_depth  # Gap to separator
+                            draw_wall_section(ax, x_pos + swt - wt, cont_start_y, wt, cont_height, display_options["show_hatching"])
 
                 shaft_left = x_pos + swt
 
@@ -2101,6 +2181,8 @@ class LiftShaftSketch:
                 center_x=door_center_x,  # Shaft center for fire lifts, car center for others
                 wall_inner_y=shaft_interior_y + sd,  # Top of shaft interior
                 door_width=lift_config.door_width,
+                door_extension=lift_config.door_extension,
+                door_thickness=lift_config.door_panel_thickness,
                 mirrored=True,  # Draw doors facing down (into shaft)
             )
 
@@ -2214,7 +2296,7 @@ class LiftShaftSketch:
             car_x = shaft_x + (shaft_width - uc_width) / 2
         else:
             car_x = shaft_x + cb_width
-        car_y = shaft_y + sd - 2 * config.DEFAULT_LIFT_DOOR_THICKNESS - config.DEFAULT_DOOR_GAP - uc_depth
+        car_y = shaft_y + sd - 2 * lift_config.door_panel_thickness - config.DEFAULT_DOOR_GAP - uc_depth
 
         # Draw lift doors (at top of shaft)
         if display_options.get("show_lift_doors", False):
@@ -2223,6 +2305,8 @@ class LiftShaftSketch:
                 center_x=car_center_x,
                 wall_inner_y=shaft_y + sd,
                 door_width=lift_config.door_width,
+                door_extension=lift_config.door_extension,
+                door_thickness=lift_config.door_panel_thickness,
                 mirrored=True,
             )
 

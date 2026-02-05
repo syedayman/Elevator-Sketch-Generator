@@ -15,18 +15,33 @@ import matplotlib
 matplotlib.use('Agg')  # Non-interactive backend for PNG generation
 from matplotlib.patches import Rectangle
 
-from . import config
-from .shaft_sketch import LiftConfig
-from .drawing_utils import (
-    draw_wall_section,
-    draw_dimension_line,
-    draw_title_block,
-    draw_section_pit,
-    draw_break_lines,
-    draw_section_landing,
-    draw_floor_slab_protrusion,
-    draw_machine_image,
-)
+# Support both package (relative) and standalone (absolute) imports
+try:
+    from . import config
+    from .shaft_sketch import LiftConfig
+    from .drawing_utils import (
+        draw_wall_section,
+        draw_dimension_line,
+        draw_title_block,
+        draw_section_pit,
+        draw_break_lines,
+        draw_section_landing,
+        draw_floor_slab_protrusion,
+        draw_machine_image,
+    )
+except ImportError:
+    import config
+    from shaft_sketch import LiftConfig
+    from drawing_utils import (
+        draw_wall_section,
+        draw_dimension_line,
+        draw_title_block,
+        draw_section_pit,
+        draw_break_lines,
+        draw_section_landing,
+        draw_floor_slab_protrusion,
+        draw_machine_image,
+    )
 
 
 @dataclass
