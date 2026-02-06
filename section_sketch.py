@@ -113,7 +113,7 @@ class LiftSectionSketch:
         # Determine dimensions from lift_config or defaults
         if lift_config is not None:
             self.shaft_width = lift_config.shaft_width
-            self.shaft_depth = lift_config.shaft_depth
+            self.shaft_depth = lift_config.effective_shaft_depth
             self.wall_thickness = lift_config.wall_thickness
             self.door_width = lift_config.door_width
             self.door_height = lift_config.door_height

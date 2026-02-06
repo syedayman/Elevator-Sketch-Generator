@@ -83,13 +83,12 @@ class LiftConfig:
 
     # MRA-specific parameters (used when lift_machine_type == "mra")
     mra_car_bracket_width: float = field(default_factory=lambda: config.MRA_CAR_BRACKET_WIDTH)
+    mra_car_bracket_width_right: Optional[float] = None  # None = same as left
     mra_cw_bracket_depth: float = field(default_factory=lambda: config.MRA_CW_BRACKET_DEPTH)
 
-    # MRL shaft depth override (MRL only - no bracket controls depth)
+    # Shaft dimension overrides (user-specified explicit shaft dimensions)
+    shaft_width_override: Optional[float] = None
     shaft_depth_override: Optional[float] = None
-
-    # Shaft dimensions
-    shaft_depth: float = field(default_factory=lambda: config.DEFAULT_SHAFT_DEPTH)
     wall_thickness: float = field(default_factory=lambda: config.DEFAULT_WALL_THICKNESS)
 
     # Door/opening dimensions
@@ -113,10 +112,17 @@ class LiftConfig:
         return self.finished_car_depth + config.DEFAULT_CAR_WALL_THICKNESS
 
     @property
+    def mra_right_bracket_width(self) -> float:
+        """Right MRA car bracket width (defaults to left if not set)."""
+        if self.mra_car_bracket_width_right is not None:
+            return self.mra_car_bracket_width_right
+        return self.mra_car_bracket_width
+
+    @property
     def min_shaft_width(self) -> float:
         """Calculate minimum shaft width from car + brackets."""
         if self.lift_machine_type == "mra":
-            width = self.unfinished_car_width + 2 * self.mra_car_bracket_width
+            width = self.mra_car_bracket_width + self.unfinished_car_width + self.mra_right_bracket_width
         else:
             width = self.counterweight_bracket_width + self.unfinished_car_width + self.car_bracket_width
         if self.lift_type == "fire":
@@ -135,64 +141,159 @@ class LiftConfig:
 
     @property
     def shaft_width(self) -> float:
-        """Calculate shaft width from car + brackets."""
+        """Return shaft width (override or calculated minimum)."""
+        if self.shaft_width_override is not None:
+            return self.shaft_width_override
         return self.min_shaft_width
 
     @property
-    def effective_shaft_depth(self) -> float:
-        """
-        Return shaft depth (override or calculated minimum).
+    def shaft_depth(self) -> float:
+        """Backward-compatible alias for effective_shaft_depth."""
+        return self.effective_shaft_depth
 
-        For MRL: uses shaft_depth_override if set, otherwise min_shaft_depth.
-        For MRA: always uses min_shaft_depth (controlled by mra_cw_bracket_depth).
-        """
-        if self.lift_machine_type == "mrl" and self.shaft_depth_override is not None:
+    @property
+    def effective_shaft_depth(self) -> float:
+        """Return shaft depth (override or calculated minimum)."""
+        if self.shaft_depth_override is not None:
             return self.shaft_depth_override
         return self.min_shaft_depth
 
+    @property
+    def remaining_width(self) -> float:
+        """Extra width beyond minimum (shaft_width - min_shaft_width)."""
+        return self.shaft_width - self.min_shaft_width
+
+    @property
+    def remaining_depth(self) -> float:
+        """Extra depth beyond minimum (effective_shaft_depth - min_shaft_depth)."""
+        return self.effective_shaft_depth - self.min_shaft_depth
+
+    @property
+    def actual_rear_clearance(self) -> float:
+        """MRL: actual rear clearance including extra depth."""
+        return config.DEFAULT_REAR_CLEARANCE + self.remaining_depth
+
+    @property
+    def actual_mra_cw_gap(self) -> float:
+        """MRA: actual gap between car top and CW bracket including extra depth."""
+        return config.MRA_CW_GAP + self.remaining_depth
+
+    def _width_breakdown_str(self) -> str:
+        """Return a human-readable breakdown of minimum shaft width components."""
+        if self.lift_machine_type == "mra":
+            return (f"Left Bracket ({int(self.mra_car_bracket_width)}) + "
+                    f"Unfinished Car ({int(self.unfinished_car_width)}) + "
+                    f"Right Bracket ({int(self.mra_right_bracket_width)})")
+        else:
+            return (f"CW Bracket ({int(self.counterweight_bracket_width)}) + "
+                    f"Unfinished Car ({int(self.unfinished_car_width)}) + "
+                    f"Car Bracket ({int(self.car_bracket_width)})")
+
+    def _depth_breakdown_str(self) -> str:
+        """Return a human-readable breakdown of minimum shaft depth components."""
+        if self.lift_machine_type == "mra":
+            return (f"2 x Door ({int(self.door_panel_thickness)}) + "
+                    f"Gap ({int(config.DEFAULT_DOOR_GAP)}) + "
+                    f"Unfinished Car ({int(self.unfinished_car_depth)}) + "
+                    f"CW Gap ({int(config.MRA_CW_GAP)}) + "
+                    f"CW Bracket ({int(self.mra_cw_bracket_depth)})")
+        else:
+            return (f"Unfinished Car ({int(self.unfinished_car_depth)}) + "
+                    f"2 x Door ({int(self.door_panel_thickness)}) + "
+                    f"Gap ({int(config.DEFAULT_DOOR_GAP)}) + "
+                    f"Rear Clearance ({int(config.DEFAULT_REAR_CLEARANCE)})")
+
     def __post_init__(self):
-        """Validate and configure fire lift settings."""
+        """Validate and configure lift settings. Collects all errors and reports them together."""
+        errors = []
+
+        # Fire lift cabin size validation
         if self.lift_type == "fire":
-            # Validate cabin size
             size = (int(self.finished_car_width), int(self.finished_car_depth))
             if size not in FIRE_LIFT_CABIN_SIZES:
                 valid = ", ".join(f"{w}x{d}" for w, d in FIRE_LIFT_CABIN_SIZES)
-                raise ValueError(
+                errors.append(
                     f"Fire lift must use one of these cabin sizes (WxD): {valid}. "
                     f"Got: {size[0]}x{size[1]}"
                 )
             # Set fire lift door width
             self.door_width = config.FIRE_LIFT_DOOR_WIDTH
 
-        # Validate bracket dimensions meet minimums (defaults are the minimums)
+        # Validate bracket dimensions meet minimums
         if self.lift_machine_type == "mrl":
             if self.counterweight_bracket_width < config.DEFAULT_COUNTERWEIGHT_BRACKET_WIDTH:
-                raise ValueError(
+                errors.append(
                     f"CW Bracket Width ({int(self.counterweight_bracket_width)}mm) is below minimum "
-                    f"({config.DEFAULT_COUNTERWEIGHT_BRACKET_WIDTH}mm)."
+                    f"({int(config.DEFAULT_COUNTERWEIGHT_BRACKET_WIDTH)}mm)."
                 )
             if self.car_bracket_width < config.DEFAULT_CAR_BRACKET_WIDTH:
-                raise ValueError(
+                errors.append(
                     f"Car Bracket Width ({int(self.car_bracket_width)}mm) is below minimum "
-                    f"({config.DEFAULT_CAR_BRACKET_WIDTH}mm)."
-                )
-            # Validate MRL shaft depth override
-            if self.shaft_depth_override is not None and self.shaft_depth_override < self.min_shaft_depth:
-                raise ValueError(
-                    f"Shaft Depth ({int(self.shaft_depth_override)}mm) is below minimum "
-                    f"({int(self.min_shaft_depth)}mm)."
+                    f"({int(config.DEFAULT_CAR_BRACKET_WIDTH)}mm)."
                 )
         else:  # MRA
             if self.mra_car_bracket_width < config.MRA_CAR_BRACKET_WIDTH:
-                raise ValueError(
-                    f"Car Bracket Width ({int(self.mra_car_bracket_width)}mm) is below minimum "
-                    f"({config.MRA_CAR_BRACKET_WIDTH}mm)."
+                errors.append(
+                    f"Left Car Bracket ({int(self.mra_car_bracket_width)}mm) is below minimum "
+                    f"({int(config.MRA_CAR_BRACKET_WIDTH)}mm)."
+                )
+            if self.mra_right_bracket_width < config.MRA_CAR_BRACKET_WIDTH:
+                errors.append(
+                    f"Right Car Bracket ({int(self.mra_right_bracket_width)}mm) is below minimum "
+                    f"({int(config.MRA_CAR_BRACKET_WIDTH)}mm)."
                 )
             if self.mra_cw_bracket_depth < config.MRA_CW_BRACKET_DEPTH:
-                raise ValueError(
+                errors.append(
                     f"CW Bracket Depth ({int(self.mra_cw_bracket_depth)}mm) is below minimum "
-                    f"({config.MRA_CW_BRACKET_DEPTH}mm)."
+                    f"({int(config.MRA_CW_BRACKET_DEPTH)}mm)."
                 )
+
+        # Validate shaft width override
+        if self.shaft_width_override is not None:
+            if self.shaft_width_override < self.min_shaft_width:
+                errors.append(
+                    f"Shaft Width ({int(self.shaft_width_override)}mm) is below minimum "
+                    f"({int(self.min_shaft_width)}mm). Minimum = {self._width_breakdown_str()}"
+                )
+            # Fire lift minimum shaft width
+            if self.lift_type == "fire" and self.shaft_width_override < config.FIRE_LIFT_MIN_SHAFT_WIDTH:
+                errors.append(
+                    f"Fire lift Shaft Width ({int(self.shaft_width_override)}mm) is below "
+                    f"fire lift minimum ({int(config.FIRE_LIFT_MIN_SHAFT_WIDTH)}mm)."
+                )
+            # Structural opening must fit within shaft width
+            if self.shaft_width_override < self.structural_opening_width:
+                errors.append(
+                    f"Structural Opening Width ({int(self.structural_opening_width)}mm) exceeds "
+                    f"Shaft Width ({int(self.shaft_width_override)}mm)."
+                )
+
+        # Validate shaft depth override
+        if self.shaft_depth_override is not None:
+            if self.shaft_depth_override < self.min_shaft_depth:
+                errors.append(
+                    f"Shaft Depth ({int(self.shaft_depth_override)}mm) is below minimum "
+                    f"({int(self.min_shaft_depth)}mm). Minimum = {self._depth_breakdown_str()}"
+                )
+            # MRL: check minimum rear clearance
+            if self.lift_machine_type == "mrl":
+                actual_rear = config.DEFAULT_REAR_CLEARANCE + (self.shaft_depth_override - self.min_shaft_depth) if self.shaft_depth_override >= self.min_shaft_depth else config.DEFAULT_REAR_CLEARANCE - (self.min_shaft_depth - self.shaft_depth_override)
+                if actual_rear < config.MIN_REAR_CLEARANCE:
+                    errors.append(
+                        f"MRL Rear Clearance ({int(actual_rear)}mm) is below minimum "
+                        f"({int(config.MIN_REAR_CLEARANCE)}mm)."
+                    )
+
+        # Validate door width fits structural opening
+        if self.door_width > self.structural_opening_width:
+            errors.append(
+                f"Door Width ({int(self.door_width)}mm) exceeds "
+                f"Structural Opening Width ({int(self.structural_opening_width)}mm)."
+            )
+
+        if errors:
+            error_list = "\n  - ".join(errors)
+            raise ValueError(f"LiftConfig validation failed:\n  - {error_list}")
 
 
 def validate_fire_lift_positions(lifts: List[LiftConfig]) -> None:
@@ -648,13 +749,19 @@ class LiftShaftSketch:
         if self._use_enhanced_api and self.lifts:
             lift = self.lifts[0]
             if lift.lift_machine_type == "mra":
-                # MRA: car is centered in shaft
-                car_center_x = wt + sw / 2
-            else:
-                # MRL: car is after CW bracket
-                cwb_width = lift.counterweight_bracket_width
+                # MRA: center car in available space between brackets
+                left_cb = lift.mra_car_bracket_width
+                right_cb = lift.mra_right_bracket_width
                 uc_width = lift.unfinished_car_width
-                car_center_x = wt + cwb_width + uc_width / 2
+                available = sw - left_cb - right_cb
+                car_center_x = wt + left_cb + (available - uc_width) / 2 + uc_width / 2
+            else:
+                # MRL: center car in available space between brackets
+                cwb_width = lift.counterweight_bracket_width
+                cb_width = lift.car_bracket_width
+                uc_width = lift.unfinished_car_width
+                available = sw - cwb_width - cb_width
+                car_center_x = wt + cwb_width + (available - uc_width) / 2 + uc_width / 2
 
             # For fire lifts, center door/opening on shaft (not car) to avoid wall overlap
             if lift.lift_type == "fire":
@@ -741,12 +848,17 @@ class LiftShaftSketch:
         uc_depth = lift_config.unfinished_car_depth
         fc_width = lift_config.finished_car_width
         fc_depth = lift_config.finished_car_depth
+        sw = lift_config.shaft_width  # Respects override
 
-        # Calculate car center position (depends on mirror flag)
+        # Calculate car center position (center car in available space between brackets)
         if not mirror:
-            car_center_x = shaft_x + cwb_width + uc_width / 2
+            available = sw - cwb_width - cb_width
+            car_x_offset = cwb_width + (available - uc_width) / 2
+            car_center_x = shaft_x + car_x_offset + uc_width / 2
         else:
-            car_center_x = shaft_x + cb_width + uc_width / 2
+            available = sw - cb_width - cwb_width
+            car_x_offset = cb_width + (available - uc_width) / 2
+            car_center_x = shaft_x + car_x_offset + uc_width / 2
 
         # For fire lifts, center doors on shaft (not car) to avoid wall overlap
         if lift_config.lift_type == "fire":
@@ -780,17 +892,13 @@ class LiftShaftSketch:
                 draw_counterweight_bracket(ax, cw_bracket_x, bracket_y, cwb_width, bracket_height, align="right")
 
             # Draw car bracket box (blue box on opposite side of counterweight)
-            # Positioned so edge touches the separator (steel beam/wall)
+            # Positioned against shaft wall
             car_bracket_box_y = shaft_y + (sd - config.CAR_BRACKET_BOX_HEIGHT) / 2
             if not mirror:
-                # Normal: car bracket on right side - right edge touches separator/wall
-                # For fire lifts, use actual shaft width (may be larger than component sum)
-                if lift_config.lift_type == "fire":
-                    car_bracket_box_x = shaft_x + lift_config.shaft_width - config.CAR_BRACKET_BOX_WIDTH
-                else:
-                    car_bracket_box_x = shaft_x + cwb_width + uc_width + cb_width - config.CAR_BRACKET_BOX_WIDTH
+                # Normal: car bracket on right side - against right shaft wall
+                car_bracket_box_x = shaft_x + sw - config.CAR_BRACKET_BOX_WIDTH
             else:
-                # Mirrored: car bracket on left side - left edge touches separator/wall
+                # Mirrored: car bracket on left side - against left shaft wall
                 car_bracket_box_x = shaft_x
 
             ax.add_patch(Rectangle(
@@ -820,10 +928,14 @@ class LiftShaftSketch:
         # Draw lift car - position depends on mirror flag
         if display_options["show_car_interior"]:
             if not mirror:
-                car_x = shaft_x + cwb_width
+                available_w = sw - cwb_width - cb_width
+                car_x = shaft_x + cwb_width + (available_w - uc_width) / 2
             else:
-                car_x = shaft_x + cb_width
-            car_y = shaft_y + (sd - uc_depth) / 2
+                available_w = sw - cb_width - cwb_width
+                car_x = shaft_x + cb_width + (available_w - uc_width) / 2
+            # Front-fixed: extra depth goes to rear clearance
+            door_zone = 2 * lift_config.door_panel_thickness + config.DEFAULT_DOOR_GAP
+            car_y = shaft_y + door_zone
 
             draw_lift_car(
                 ax,
@@ -878,16 +990,19 @@ class LiftShaftSketch:
         # Use provided shaft_depth or fall back to self.shaft_depth
         sd = shaft_depth if shaft_depth is not None else self.shaft_depth
 
-        cb_width = lift_config.mra_car_bracket_width
+        left_cb = lift_config.mra_car_bracket_width
+        right_cb = lift_config.mra_right_bracket_width
         cw_bracket_depth = lift_config.mra_cw_bracket_depth
         uc_width = lift_config.unfinished_car_width
         uc_depth = lift_config.unfinished_car_depth
         fc_width = lift_config.finished_car_width
         fc_depth = lift_config.finished_car_depth
-        shaft_width = lift_config.shaft_width  # = uc_width + 2 * cb_width
+        shaft_width = lift_config.shaft_width
 
-        # Car is centered horizontally (between two car brackets)
-        car_center_x = shaft_x + shaft_width / 2
+        # Calculate car position (center car in available space between brackets)
+        available_w = shaft_width - left_cb - right_cb
+        car_x = shaft_x + left_cb + (available_w - uc_width) / 2
+        car_center_x = car_x + uc_width / 2
 
         # Draw lift doors first (if enabled) - centered on car cabin
         if display_options.get("show_lift_doors", False):
@@ -899,13 +1014,6 @@ class LiftShaftSketch:
                 door_extension=lift_config.door_extension,
                 door_thickness=lift_config.door_panel_thickness,
             )
-
-        # Calculate car position (needed for bracket placement)
-        # For fire lifts, center the car in the wider shaft
-        if lift_config.lift_type == "fire":
-            car_x = shaft_x + (shaft_width - uc_width) / 2
-        else:
-            car_x = shaft_x + cb_width  # Car starts after left car bracket
         # Position car so bottom touches top of car door (like MRL)
         # Door area = 2 * door_thickness + door_gap
         car_y = shaft_y + 2 * lift_config.door_panel_thickness + config.DEFAULT_DOOR_GAP
@@ -929,7 +1037,7 @@ class LiftShaftSketch:
                 shaft_y=shaft_y,
                 shaft_width=shaft_width,
                 shaft_depth=sd,
-                car_bracket_width=cb_width,
+                car_bracket_width=left_cb,
                 car_y=car_y,
                 car_depth=uc_depth,
             )
@@ -1008,7 +1116,7 @@ class LiftShaftSketch:
 
         # Get door and structural opening heights
         if self._use_enhanced_api and self.lifts:
-            dh = config.DEFAULT_DOOR_HEIGHT
+            dh = self.lifts[0].door_height
             soh = self.lifts[0].structural_opening_height
         else:
             dh = self.door_height
@@ -1018,13 +1126,19 @@ class LiftShaftSketch:
         if self._use_enhanced_api and self.lifts:
             lift = self.lifts[0]
             if lift.lift_machine_type == "mra":
-                # MRA: car is centered in shaft
-                car_center_x = wt + sw / 2
-            else:
-                # MRL: car is after CW bracket
-                cwb_width = lift.counterweight_bracket_width
+                # MRA: center car in available space between brackets
+                left_cb = lift.mra_car_bracket_width
+                right_cb = lift.mra_right_bracket_width
                 uc_width = lift.unfinished_car_width
-                car_center_x = wt + cwb_width + uc_width / 2
+                available = sw - left_cb - right_cb
+                car_center_x = wt + left_cb + (available - uc_width) / 2 + uc_width / 2
+            else:
+                # MRL: center car in available space between brackets
+                cwb_width = lift.counterweight_bracket_width
+                cb_width = lift.car_bracket_width
+                uc_width = lift.unfinished_car_width
+                available = sw - cwb_width - cb_width
+                car_center_x = wt + cwb_width + (available - uc_width) / 2 + uc_width / 2
 
             # For fire lifts, door is centered on shaft (not car)
             if lift.lift_type == "fire":
@@ -1093,17 +1207,21 @@ class LiftShaftSketch:
 
             # Calculate car positions based on machine type
             if lift.lift_machine_type == "mra":
-                # MRA: For fire lifts, center car in shaft; otherwise after left bracket
-                if lift.lift_type == "fire":
-                    car_x = wt + (lift.shaft_width - lift.unfinished_car_width) / 2
-                else:
-                    car_x = wt + lift.mra_car_bracket_width
-                # MRA: car bottom touches top of car door (like MRL)
-                car_y = wt + 2 * config.DEFAULT_LIFT_DOOR_THICKNESS + config.DEFAULT_DOOR_GAP
+                # MRA: center car in available space between brackets
+                left_cb = lift.mra_car_bracket_width
+                right_cb = lift.mra_right_bracket_width
+                available_w = lift.shaft_width - left_cb - right_cb
+                car_x = wt + left_cb + (available_w - lift.unfinished_car_width) / 2
+                # MRA: car bottom touches top of car door
+                car_y = wt + 2 * lift.door_panel_thickness + config.DEFAULT_DOOR_GAP
             else:
-                # MRL: car starts after counterweight bracket
-                car_x = wt + lift.counterweight_bracket_width
-                car_y = wt + (sd - lift.unfinished_car_depth) / 2
+                # MRL: center car in available space between brackets
+                cwb_w = lift.counterweight_bracket_width
+                cb_w = lift.car_bracket_width
+                available_w = lift.shaft_width - cwb_w - cb_w
+                car_x = wt + cwb_w + (available_w - lift.unfinished_car_width) / 2
+                # Front-fixed: extra depth goes to rear clearance
+                car_y = wt + 2 * lift.door_panel_thickness + config.DEFAULT_DOOR_GAP
 
             finished_car_x = car_x + (lift.unfinished_car_width - lift.finished_car_width) / 2
             finished_car_y = car_y  # Same bottom as unfinished car
@@ -1125,10 +1243,10 @@ class LiftShaftSketch:
             if lift.lift_machine_type == "mra":
                 # MRA: Dynamic left bracket (shaft wall to car left edge)
                 shaft_left_wall = wt
-                car_left_edge = wt + lift.mra_car_bracket_width  # nominal position
-                # For fire lifts, car is centered, so recalculate
-                if lift.lift_type == "fire":
-                    car_left_edge = wt + (lift.shaft_width - lift.unfinished_car_width) / 2
+                left_cb = lift.mra_car_bracket_width
+                right_cb = lift.mra_right_bracket_width
+                available_w = lift.shaft_width - left_cb - right_cb
+                car_left_edge = wt + left_cb + (available_w - lift.unfinished_car_width) / 2
                 left_gap = car_left_edge - shaft_left_wall
                 draw_dimension_line(
                     ax,
@@ -1317,18 +1435,24 @@ class LiftShaftSketch:
             # Fire lifts: always center on shaft to avoid wall overlap
             if self._use_enhanced_api and lift_config:
                 if lift_config.lift_machine_type == "mra":
-                    # MRA: car is centered in shaft
-                    car_center_x = shaft_left + sw / 2
+                    # MRA: center car in available space between brackets
+                    left_cb = lift_config.mra_car_bracket_width
+                    right_cb = lift_config.mra_right_bracket_width
+                    uc_width = lift_config.unfinished_car_width
+                    available = sw - left_cb - right_cb
+                    car_center_x = shaft_left + left_cb + (available - uc_width) / 2 + uc_width / 2
                 else:
-                    # MRL: Calculate cabin center based on mirror state (same as _draw_lift_interior)
+                    # MRL: center car in available space between brackets
                     cwb_width = lift_config.counterweight_bracket_width
                     cb_width = lift_config.car_bracket_width
                     uc_width = lift_config.unfinished_car_width
                     mirror = (lift_idx % 2 == 1)
                     if not mirror:
-                        car_center_x = shaft_left + cwb_width + uc_width / 2
+                        available = sw - cwb_width - cb_width
+                        car_center_x = shaft_left + cwb_width + (available - uc_width) / 2 + uc_width / 2
                     else:
-                        car_center_x = shaft_left + cb_width + uc_width / 2
+                        available = sw - cb_width - cwb_width
+                        car_center_x = shaft_left + cb_width + (available - uc_width) / 2 + uc_width / 2
 
                 # For fire lifts, center door/opening on shaft (not car) to avoid wall overlap
                 if lift_config.lift_type == "fire":
@@ -1435,7 +1559,7 @@ class LiftShaftSketch:
             # Get door width and heights for this lift
             if lift:
                 dw = lift.door_width
-                dh = config.DEFAULT_DOOR_HEIGHT
+                dh = lift.door_height
                 soh = lift.structural_opening_height
             else:
                 dw = self.door_width
@@ -1445,18 +1569,24 @@ class LiftShaftSketch:
             # Calculate cabin center based on mirror state (same as _draw_multi_lift)
             if self._use_enhanced_api and lift:
                 if lift.lift_machine_type == "mra":
-                    # MRA: car is centered in shaft
-                    car_center_x = shaft_left + sw / 2
+                    # MRA: center car in available space between brackets
+                    left_cb = lift.mra_car_bracket_width
+                    right_cb = lift.mra_right_bracket_width
+                    uc_width = lift.unfinished_car_width
+                    available = sw - left_cb - right_cb
+                    car_center_x = shaft_left + left_cb + (available - uc_width) / 2 + uc_width / 2
                 else:
-                    # MRL: car position depends on mirror state
+                    # MRL: center car in available space between brackets
                     cwb_width = lift.counterweight_bracket_width
                     cb_width = lift.car_bracket_width
                     uc_width = lift.unfinished_car_width
                     mirror = (lift_idx % 2 == 1)
                     if not mirror:
-                        car_center_x = shaft_left + cwb_width + uc_width / 2
+                        available = sw - cwb_width - cb_width
+                        car_center_x = shaft_left + cwb_width + (available - uc_width) / 2 + uc_width / 2
                     else:
-                        car_center_x = shaft_left + cb_width + uc_width / 2
+                        available = sw - cb_width - cwb_width
+                        car_center_x = shaft_left + cb_width + (available - uc_width) / 2 + uc_width / 2
 
                 # For fire lifts, center door/opening on shaft (not car)
                 if lift.lift_type == "fire":
@@ -1515,22 +1645,26 @@ class LiftShaftSketch:
 
                 # Calculate car positions based on machine type and mirror state
                 if lift.lift_machine_type == "mra":
-                    # MRA: For fire lifts, center car in shaft; otherwise after left bracket
-                    if lift.lift_type == "fire":
-                        car_x = shaft_left + (sw - lift.unfinished_car_width) / 2
-                    else:
-                        car_x = shaft_left + lift.mra_car_bracket_width
-                    car_y = wt + 2 * config.DEFAULT_LIFT_DOOR_THICKNESS + config.DEFAULT_DOOR_GAP
+                    # MRA: center car in available space between brackets
+                    left_cb = lift.mra_car_bracket_width
+                    right_cb = lift.mra_right_bracket_width
+                    available_w = lift.shaft_width - left_cb - right_cb
+                    car_x = shaft_left + left_cb + (available_w - lift.unfinished_car_width) / 2
+                    car_y = wt + 2 * lift.door_panel_thickness + config.DEFAULT_DOOR_GAP
                 else:
-                    # MRL: car position depends on mirror state
+                    # MRL: center car in available space between brackets
                     if not mirror:
-                        # Normal: CW bracket on left, car bracket on right
-                        car_x = shaft_left + lift.counterweight_bracket_width
+                        cwb_w = lift.counterweight_bracket_width
+                        cb_w = lift.car_bracket_width
+                        available_w = lift.shaft_width - cwb_w - cb_w
+                        car_x = shaft_left + cwb_w + (available_w - lift.unfinished_car_width) / 2
                     else:
-                        # Mirrored: car bracket on left, CW bracket on right
-                        car_x = shaft_left + lift.car_bracket_width
-                    # Use this lift's actual depth (sd) for car centering
-                    car_y = wt + (sd - lift.unfinished_car_depth) / 2
+                        cb_w = lift.car_bracket_width
+                        cwb_w = lift.counterweight_bracket_width
+                        available_w = lift.shaft_width - cb_w - cwb_w
+                        car_x = shaft_left + cb_w + (available_w - lift.unfinished_car_width) / 2
+                    # Front-fixed: extra depth goes to rear clearance
+                    car_y = wt + 2 * lift.door_panel_thickness + config.DEFAULT_DOOR_GAP
 
                 finished_car_x = car_x + (lift.unfinished_car_width - lift.finished_car_width) / 2
                 finished_car_y = car_y
@@ -1545,9 +1679,10 @@ class LiftShaftSketch:
 
                 if lift.lift_machine_type == "mra":
                     # MRA: Dynamic left bracket (shaft wall to car left edge)
-                    car_left_edge = shaft_left + lift.mra_car_bracket_width  # nominal
-                    if lift.lift_type == "fire":
-                        car_left_edge = shaft_left + (sw - lift.unfinished_car_width) / 2
+                    left_cb = lift.mra_car_bracket_width
+                    right_cb = lift.mra_right_bracket_width
+                    available_w = lift.shaft_width - left_cb - right_cb
+                    car_left_edge = shaft_left + left_cb + (available_w - lift.unfinished_car_width) / 2
                     left_gap = car_left_edge - shaft_left
                     draw_dimension_line(
                         ax,
@@ -1640,15 +1775,18 @@ class LiftShaftSketch:
             first_shaft_left = wt
             first_sw = self._shaft_widths[0]
             if first_lift.lift_machine_type == "mra":
-                if first_lift.lift_type == "fire":
-                    first_car_x = first_shaft_left + (first_sw - first_lift.unfinished_car_width) / 2
-                else:
-                    first_car_x = first_shaft_left + first_lift.mra_car_bracket_width
-                first_car_y = wt + 2 * config.DEFAULT_LIFT_DOOR_THICKNESS + config.DEFAULT_DOOR_GAP
+                left_cb = first_lift.mra_car_bracket_width
+                right_cb = first_lift.mra_right_bracket_width
+                available_w = first_lift.shaft_width - left_cb - right_cb
+                first_car_x = first_shaft_left + left_cb + (available_w - first_lift.unfinished_car_width) / 2
+                first_car_y = wt + 2 * first_lift.door_panel_thickness + config.DEFAULT_DOOR_GAP
             else:
                 # First lift is never mirrored (lift_idx 0)
-                first_car_x = first_shaft_left + first_lift.counterweight_bracket_width
-                first_car_y = wt + (first_sd - first_lift.unfinished_car_depth) / 2
+                cwb_w = first_lift.counterweight_bracket_width
+                cb_w = first_lift.car_bracket_width
+                available_w = first_lift.shaft_width - cwb_w - cb_w
+                first_car_x = first_shaft_left + cwb_w + (available_w - first_lift.unfinished_car_width) / 2
+                first_car_y = wt + 2 * first_lift.door_panel_thickness + config.DEFAULT_DOOR_GAP
 
             first_finished_car_x = first_car_x + (first_lift.unfinished_car_width - first_lift.finished_car_width) / 2
 
@@ -1685,17 +1823,23 @@ class LiftShaftSketch:
 
                     last_sw = self._shaft_widths[-1]
                     if last_lift.lift_machine_type == "mra":
-                        if last_lift.lift_type == "fire":
-                            last_car_x = last_shaft_left + (last_sw - last_lift.unfinished_car_width) / 2
-                        else:
-                            last_car_x = last_shaft_left + last_lift.mra_car_bracket_width
-                        last_car_y = wt + 2 * config.DEFAULT_LIFT_DOOR_THICKNESS + config.DEFAULT_DOOR_GAP
+                        left_cb = last_lift.mra_car_bracket_width
+                        right_cb = last_lift.mra_right_bracket_width
+                        available_w = last_lift.shaft_width - left_cb - right_cb
+                        last_car_x = last_shaft_left + left_cb + (available_w - last_lift.unfinished_car_width) / 2
+                        last_car_y = wt + 2 * last_lift.door_panel_thickness + config.DEFAULT_DOOR_GAP
                     else:
                         if not last_mirror:
-                            last_car_x = last_shaft_left + last_lift.counterweight_bracket_width
+                            cwb_w = last_lift.counterweight_bracket_width
+                            cb_w = last_lift.car_bracket_width
+                            available_w = last_lift.shaft_width - cwb_w - cb_w
+                            last_car_x = last_shaft_left + cwb_w + (available_w - last_lift.unfinished_car_width) / 2
                         else:
-                            last_car_x = last_shaft_left + last_lift.car_bracket_width
-                        last_car_y = wt + (last_sd - last_lift.unfinished_car_depth) / 2
+                            cb_w = last_lift.car_bracket_width
+                            cwb_w = last_lift.counterweight_bracket_width
+                            available_w = last_lift.shaft_width - cb_w - cwb_w
+                            last_car_x = last_shaft_left + cb_w + (available_w - last_lift.unfinished_car_width) / 2
+                        last_car_y = wt + 2 * last_lift.door_panel_thickness + config.DEFAULT_DOOR_GAP
 
                     last_finished_car_x = last_car_x + (last_lift.unfinished_car_width - last_lift.finished_car_width) / 2
                     last_car_right_x = last_car_x + last_lift.unfinished_car_width
@@ -1999,18 +2143,24 @@ class LiftShaftSketch:
                 # Mirrored: shaft interior at top (after back wall), front wall at bottom
                 draw_shaft_interior(ax, shaft_left, base_y + wt + (max_shaft_depth - sd), sw, sd)
 
-            # Calculate car center position (depends on mirror flag for MRL)
+            # Calculate car center position (center car in available space between brackets)
             if lift_config.lift_machine_type == "mra":
-                car_center_x = shaft_left + sw / 2
+                left_cb = lift_config.mra_car_bracket_width
+                right_cb = lift_config.mra_right_bracket_width
+                uc_width = lift_config.unfinished_car_width
+                available = sw - left_cb - right_cb
+                car_center_x = shaft_left + left_cb + (available - uc_width) / 2 + uc_width / 2
             else:
                 cwb_width = lift_config.counterweight_bracket_width
                 cb_width = lift_config.car_bracket_width
                 uc_width = lift_config.unfinished_car_width
                 mirror = (lift_idx % 2 == 1)
                 if not mirror:
-                    car_center_x = shaft_left + cwb_width + uc_width / 2
+                    available = sw - cwb_width - cb_width
+                    car_center_x = shaft_left + cwb_width + (available - uc_width) / 2 + uc_width / 2
                 else:
-                    car_center_x = shaft_left + cb_width + uc_width / 2
+                    available = sw - cb_width - cwb_width
+                    car_center_x = shaft_left + cb_width + (available - uc_width) / 2 + uc_width / 2
 
             # For fire lifts, center door/opening on shaft (not car) to avoid wall overlap
             if lift_config.lift_type == "fire":
@@ -2153,12 +2303,15 @@ class LiftShaftSketch:
         uc_depth = lift_config.unfinished_car_depth
         fc_width = lift_config.finished_car_width
         fc_depth = lift_config.finished_car_depth
+        sw = lift_config.shaft_width  # Respects override
 
-        # Calculate car center position (depends on mirror flag)
+        # Calculate car center position (center car in available space between brackets)
         if not mirror:
-            car_center_x = shaft_x + cwb_width + uc_width / 2
+            available = sw - cwb_width - cb_width
+            car_center_x = shaft_x + cwb_width + (available - uc_width) / 2 + uc_width / 2
         else:
-            car_center_x = shaft_x + cb_width + uc_width / 2
+            available = sw - cb_width - cwb_width
+            car_center_x = shaft_x + cb_width + (available - uc_width) / 2 + uc_width / 2
 
         # For fire lifts, center doors on shaft (not car) to avoid wall overlap
         if lift_config.lift_type == "fire":
@@ -2167,10 +2320,9 @@ class LiftShaftSketch:
             door_center_x = car_center_x  # Car center
 
         # In mirrored orientation, doors are at top (high Y), back is at bottom (low Y)
-        # Car Y position: reversed from normal
-        # Normal: car_y = shaft_y + (sd - uc_depth) / 2 (centered in shaft depth)
-        # Mirrored: same centering but from the mirrored shaft interior
-        car_y = shaft_interior_y + (sd - uc_depth) / 2
+        # Car Y position: front-fixed (mirrored: door at top, so car top touches door zone)
+        door_zone = 2 * lift_config.door_panel_thickness + config.DEFAULT_DOOR_GAP
+        car_y = shaft_interior_y + sd - door_zone - uc_depth
 
         # Draw lift doors (at top of shaft for mirrored)
         door_info = None
@@ -2197,10 +2349,10 @@ class LiftShaftSketch:
                 cw_bracket_x = shaft_x + cb_width + uc_width
                 draw_counterweight_bracket(ax, cw_bracket_x, bracket_y, cwb_width, bracket_height, align="right")
 
-            # Draw car bracket box
+            # Draw car bracket box (against shaft wall)
             car_bracket_box_y = shaft_interior_y + (sd - config.CAR_BRACKET_BOX_HEIGHT) / 2
             if not mirror:
-                car_bracket_box_x = shaft_x + cwb_width + uc_width + cb_width - config.CAR_BRACKET_BOX_WIDTH
+                car_bracket_box_x = shaft_x + sw - config.CAR_BRACKET_BOX_WIDTH
             else:
                 car_bracket_box_x = shaft_x
 
@@ -2224,12 +2376,14 @@ class LiftShaftSketch:
 
             draw_car_bracket_cw_side(ax, cw_side_bracket_x, cw_side_bracket_y)
 
-        # Draw lift car
+        # Draw lift car (center in available space between brackets)
         if display_options["show_car_interior"]:
             if not mirror:
-                car_x = shaft_x + cwb_width
+                available_w = sw - cwb_width - cb_width
+                car_x = shaft_x + cwb_width + (available_w - uc_width) / 2
             else:
-                car_x = shaft_x + cb_width
+                available_w = sw - cb_width - cwb_width
+                car_x = shaft_x + cb_width + (available_w - uc_width) / 2
 
             draw_lift_car(
                 ax,
@@ -2279,7 +2433,8 @@ class LiftShaftSketch:
         """
         sd = shaft_depth if shaft_depth is not None else self.shaft_depth
 
-        cb_width = lift_config.mra_car_bracket_width
+        left_cb = lift_config.mra_car_bracket_width
+        right_cb = lift_config.mra_right_bracket_width
         cw_bracket_depth = lift_config.mra_cw_bracket_depth
         uc_width = lift_config.unfinished_car_width
         uc_depth = lift_config.unfinished_car_depth
@@ -2287,15 +2442,11 @@ class LiftShaftSketch:
         fc_depth = lift_config.finished_car_depth
         shaft_width = lift_config.shaft_width
 
-        car_center_x = shaft_x + shaft_width / 2
-
         # In mirrored mode, doors are at top (shaft_y + sd), CW bracket at bottom
-        # Car bottom touches bottom of car door (which is now at top)
-        # For fire lifts, center the car in the wider shaft
-        if lift_config.lift_type == "fire":
-            car_x = shaft_x + (shaft_width - uc_width) / 2
-        else:
-            car_x = shaft_x + cb_width
+        # Center car in available space between brackets
+        available_w = shaft_width - left_cb - right_cb
+        car_x = shaft_x + left_cb + (available_w - uc_width) / 2
+        car_center_x = car_x + uc_width / 2
         car_y = shaft_y + sd - 2 * lift_config.door_panel_thickness - config.DEFAULT_DOOR_GAP - uc_depth
 
         # Draw lift doors (at top of shaft)
@@ -2330,7 +2481,7 @@ class LiftShaftSketch:
                 shaft_y=shaft_y,
                 shaft_width=shaft_width,
                 shaft_depth=sd,
-                car_bracket_width=cb_width,
+                car_bracket_width=left_cb,
                 car_y=car_y,
                 car_depth=uc_depth,
             )
@@ -2461,33 +2612,36 @@ class LiftShaftSketch:
             mirror = (lift_idx % 2 == 1)
 
             if lift.lift_machine_type == "mra":
-                if lift.lift_type == "fire":
-                    car_x = shaft_left + (sw - lift.unfinished_car_width) / 2
-                else:
-                    car_x = shaft_left + lift.mra_car_bracket_width
+                left_cb = lift.mra_car_bracket_width
+                right_cb = lift.mra_right_bracket_width
+                available_w = lift.shaft_width - left_cb - right_cb
+                car_x = shaft_left + left_cb + (available_w - lift.unfinished_car_width) / 2
+                door_zone = 2 * lift.door_panel_thickness + config.DEFAULT_DOOR_GAP
                 if doors_face == "down":
-                    car_y = base_y + wt + 2 * config.DEFAULT_LIFT_DOOR_THICKNESS + config.DEFAULT_DOOR_GAP
+                    car_y = base_y + wt + door_zone
                 else:
-                    # Mirrored: car near back (bottom of shaft interior)
                     shaft_interior_y = base_y + wt + (max_shaft_depth - sd)
-                    car_y = shaft_interior_y + sd - 2 * config.DEFAULT_LIFT_DOOR_THICKNESS - config.DEFAULT_DOOR_GAP - lift.unfinished_car_depth
-                car_center_x = shaft_left + sw / 2
+                    car_y = shaft_interior_y + sd - door_zone - lift.unfinished_car_depth
+                car_center_x = car_x + lift.unfinished_car_width / 2
             else:
-                # MRL: car position depends on mirror state
+                # MRL: center car in available space between brackets
                 cwb_width = lift.counterweight_bracket_width
                 cb_width = lift.car_bracket_width
+                door_zone = 2 * lift.door_panel_thickness + config.DEFAULT_DOOR_GAP
                 if not mirror:
-                    car_x = shaft_left + cwb_width
-                    car_center_x = shaft_left + cwb_width + lift.unfinished_car_width / 2
+                    available_w = lift.shaft_width - cwb_width - cb_width
+                    car_x = shaft_left + cwb_width + (available_w - lift.unfinished_car_width) / 2
+                    car_center_x = car_x + lift.unfinished_car_width / 2
                 else:
-                    car_x = shaft_left + cb_width
-                    car_center_x = shaft_left + cb_width + lift.unfinished_car_width / 2
+                    available_w = lift.shaft_width - cb_width - cwb_width
+                    car_x = shaft_left + cb_width + (available_w - lift.unfinished_car_width) / 2
+                    car_center_x = car_x + lift.unfinished_car_width / 2
 
                 if doors_face == "down":
-                    car_y = base_y + wt + (sd - lift.unfinished_car_depth) / 2
+                    car_y = base_y + wt + door_zone
                 else:
                     shaft_interior_y = base_y + wt + (max_shaft_depth - sd)
-                    car_y = shaft_interior_y + (sd - lift.unfinished_car_depth) / 2
+                    car_y = shaft_interior_y + sd - door_zone - lift.unfinished_car_depth
 
             finished_car_x = car_x + (lift.unfinished_car_width - lift.finished_car_width) / 2
             finished_car_y = car_y
@@ -2517,9 +2671,10 @@ class LiftShaftSketch:
                 # Bracket widths (level 2)
                 if lift.lift_machine_type == "mra":
                     # MRA: Dynamic left bracket (shaft wall to car left edge)
-                    car_left_edge = shaft_left + lift.mra_car_bracket_width  # nominal
-                    if lift.lift_type == "fire":
-                        car_left_edge = shaft_left + (sw - lift.unfinished_car_width) / 2
+                    left_cb = lift.mra_car_bracket_width
+                    right_cb = lift.mra_right_bracket_width
+                    available_w = lift.shaft_width - left_cb - right_cb
+                    car_left_edge = shaft_left + left_cb + (available_w - lift.unfinished_car_width) / 2
                     left_gap = car_left_edge - shaft_left
                     draw_dimension_line(
                         ax,
@@ -2607,9 +2762,10 @@ class LiftShaftSketch:
                 # Bracket widths (level 2)
                 if lift.lift_machine_type == "mra":
                     # MRA: Dynamic left bracket (shaft wall to car left edge)
-                    car_left_edge = shaft_left + lift.mra_car_bracket_width  # nominal
-                    if lift.lift_type == "fire":
-                        car_left_edge = shaft_left + (sw - lift.unfinished_car_width) / 2
+                    left_cb = lift.mra_car_bracket_width
+                    right_cb = lift.mra_right_bracket_width
+                    available_w = lift.shaft_width - left_cb - right_cb
+                    car_left_edge = shaft_left + left_cb + (available_w - lift.unfinished_car_width) / 2
                     left_gap = car_left_edge - shaft_left
                     draw_dimension_line(
                         ax,
@@ -2683,7 +2839,7 @@ class LiftShaftSketch:
             # --- Door and structural opening dimensions (near front wall) ---
             dw = lift.door_width
             sow = lift.structural_opening_width
-            dh = config.DEFAULT_DOOR_HEIGHT
+            dh = lift.door_height
             soh = lift.structural_opening_height
             door_x = door_center_x - dw / 2
             opening_x = door_center_x - sow / 2
@@ -2779,23 +2935,26 @@ class LiftShaftSketch:
         first_shaft_left = x_offset + wt
 
         first_sw = shaft_widths[0]
+        first_door_zone = 2 * first_lift.door_panel_thickness + config.DEFAULT_DOOR_GAP
+
+        # Car X: center car in available space between brackets (same as per-lift loop)
         if first_lift.lift_machine_type == "mra":
-            if first_lift.lift_type == "fire":
-                first_car_x = first_shaft_left + (first_sw - first_lift.unfinished_car_width) / 2
-            else:
-                first_car_x = first_shaft_left + first_lift.mra_car_bracket_width
-            if doors_face == "down":
-                first_car_y = base_y + wt + 2 * config.DEFAULT_LIFT_DOOR_THICKNESS + config.DEFAULT_DOOR_GAP
-            else:
-                shaft_interior_y = base_y + wt + (max_shaft_depth - first_sd)
-                first_car_y = shaft_interior_y + first_sd - 2 * config.DEFAULT_LIFT_DOOR_THICKNESS - config.DEFAULT_DOOR_GAP - first_lift.unfinished_car_depth
+            left_cb = first_lift.mra_car_bracket_width
+            right_cb = first_lift.mra_right_bracket_width
+            available_w = first_lift.shaft_width - left_cb - right_cb
+            first_car_x = first_shaft_left + left_cb + (available_w - first_lift.unfinished_car_width) / 2
         else:
-            first_car_x = first_shaft_left + first_lift.counterweight_bracket_width
-            if doors_face == "down":
-                first_car_y = base_y + wt + (first_sd - first_lift.unfinished_car_depth) / 2
-            else:
-                shaft_interior_y = base_y + wt + (max_shaft_depth - first_sd)
-                first_car_y = shaft_interior_y + (first_sd - first_lift.unfinished_car_depth) / 2
+            cwb_w = first_lift.counterweight_bracket_width
+            cb_w = first_lift.car_bracket_width
+            available_w = first_lift.shaft_width - cwb_w - cb_w
+            first_car_x = first_shaft_left + cwb_w + (available_w - first_lift.unfinished_car_width) / 2
+
+        # Car Y: front-fixed positioning (same as per-lift loop)
+        if doors_face == "down":
+            first_car_y = base_y + wt + first_door_zone
+        else:
+            shaft_interior_y = base_y + wt + (max_shaft_depth - first_sd)
+            first_car_y = shaft_interior_y + first_sd - first_door_zone - first_lift.unfinished_car_depth
 
         first_finished_car_x = first_car_x + (first_lift.unfinished_car_width - first_lift.finished_car_width) / 2
 
