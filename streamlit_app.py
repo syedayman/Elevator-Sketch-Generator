@@ -24,6 +24,7 @@ def get_default_lift_config(lift_type: str = "passenger") -> dict:
             "door_width": config.FIRE_LIFT_DOOR_WIDTH,
             "door_panel_thickness": config.DEFAULT_LIFT_DOOR_THICKNESS,
             "door_extension": config.DEFAULT_DOOR_EXTENSION,
+            "door_opening_type": "centre",
         }
     return {
         "type": "passenger",
@@ -33,6 +34,7 @@ def get_default_lift_config(lift_type: str = "passenger") -> dict:
         "door_width": config.DEFAULT_DOOR_WIDTH,
         "door_panel_thickness": config.DEFAULT_LIFT_DOOR_THICKNESS,
         "door_extension": config.DEFAULT_DOOR_EXTENSION,
+        "door_opening_type": "centre",
     }
 
 
@@ -63,7 +65,7 @@ def render_lift_config_form(
             if st.button(
                 "Copy from Lift 1", key=copy_key,
                 disabled=lift1_is_fire,
-                help="Disabled: Fire lift settings cannot be copied" if lift1_is_fire
+                help="Disabled: Fire/Service lift settings cannot be copied" if lift1_is_fire
                      else "Copy all settings from Lift 1",
             ):
                 lift1_prefix = f"{bank_name}_lift_0"
@@ -80,7 +82,8 @@ def render_lift_config_form(
                             "_cw_bracket", "_car_bracket",
                             "_mra_left_bracket", "_mra_right_bracket",
                             "_mra_cw_bracket", "_mra_cw_gap",
-                            "_shaft_width", "_shaft_depth"]
+                            "_shaft_width", "_shaft_depth",
+                            "_door_opening_type", "_telescopic_left_ext", "_telescopic_right_ext"]
             for k in keys_to_copy:
                 src_key = f"{lift1_prefix}{k}"
                 dst_key = f"{key_prefix}{k}"
@@ -93,9 +96,10 @@ def render_lift_config_form(
         lift_type = st.selectbox(
             "Lift Type",
             options=lift_type_options,
+            format_func=lambda x: "fire/service" if x == "fire" else x,
             index=0 if initial_values.get("type", "passenger") == "passenger" else 1,
             key=f"{key_prefix}_type",
-            help="Fire lift only allowed at position 1 (first lift)",
+            help="Fire/Service lift only allowed at position 1 (first lift)",
         )
 
         # --- Shaft Dimensions (first, before car/brackets) ---
@@ -127,7 +131,10 @@ def render_lift_config_form(
             _default_sd = int(config.DEFAULT_SHAFT_DEPTH)
         # Enforce fire lift minimum shaft width
         if lift_type == "fire":
-            _default_sw = max(_default_sw, int(config.FIRE_LIFT_MIN_SHAFT_WIDTH))
+            _fire_min_sw = (config.FIRE_LIFT_MIN_SHAFT_WIDTH_TELESCOPIC
+                            if st.session_state.get(f"{key_prefix}_door_opening_type") == "Telescopic Opening"
+                            else config.FIRE_LIFT_MIN_SHAFT_WIDTH)
+            _default_sw = max(_default_sw, int(_fire_min_sw))
 
         # Reset shaft dims when machine type or lift type changes
         _stale_bracket_keys = ["_cw_bracket", "_car_bracket", "_avail_w",
@@ -183,7 +190,7 @@ def render_lift_config_form(
 
         # Car dimensions
         if lift_type == "fire":
-            # Fire lift: dropdown for fixed cabin sizes
+            # Fire/Service lift: dropdown for fixed cabin sizes
             cabin_options = list(FIRE_CABIN_OPTIONS.keys())
             default_size = f"{initial_values.get('width', 1400)} x {initial_values.get('depth', 2400)} mm"
             if default_size not in cabin_options:
@@ -194,7 +201,7 @@ def render_lift_config_form(
                 options=cabin_options,
                 index=cabin_options.index(default_size),
                 key=f"{key_prefix}_cabin_size",
-                help="Fire lifts have fixed cabin sizes",
+                help="Fire/Service lifts have fixed cabin sizes",
             )
             car_width, car_depth = FIRE_CABIN_OPTIONS[cabin_size]
             door_width = config.FIRE_LIFT_DOOR_WIDTH
@@ -377,15 +384,23 @@ def render_lift_config_form(
 
         # Apply fire lift minimum width if applicable
         if lift_type == "fire":
-            min_shaft_width = max(min_shaft_width, config.FIRE_LIFT_MIN_SHAFT_WIDTH)
+            _fire_min_sw = (config.FIRE_LIFT_MIN_SHAFT_WIDTH_TELESCOPIC
+                            if st.session_state.get(f"{key_prefix}_door_opening_type") == "Telescopic Opening"
+                            else config.FIRE_LIFT_MIN_SHAFT_WIDTH)
+            min_shaft_width = max(min_shaft_width, _fire_min_sw)
 
         # Use shaft_width_input for door panel length constraint (may be larger than min)
         shaft_width = max(shaft_width_input, min_shaft_width)
 
         # Door Settings (after brackets so we can validate against shaft width)
         with st.expander("Door Settings", expanded=False):
+            # Telescopic door variables (set defaults for non-fire lifts)
+            door_opening_type = "centre"
+            telescopic_left_ext = None
+            telescopic_right_ext = None
+
             if lift_type == "fire":
-                st.info(f"Fire lift door width is fixed at {config.FIRE_LIFT_DOOR_WIDTH}mm")
+                st.info(f"Fire/Service lift door width is fixed at {config.FIRE_LIFT_DOOR_WIDTH}mm")
                 door_width = config.FIRE_LIFT_DOOR_WIDTH
                 door_height = st.number_input(
                     "Door Opening Height (mm)",
@@ -394,6 +409,22 @@ def render_lift_config_form(
                     step=50, key=f"{key_prefix}_door_height",
                     help="Height of the door opening"
                 )
+
+                # Door Opening Type selector (fire lifts only)
+                opening_type_options = ["Centre Opening", "Telescopic Opening"]
+                opening_type_idx = 0
+                stored_type = st.session_state.get(f"{key_prefix}_door_opening_type")
+                if stored_type == "Telescopic Opening" or initial_values.get("door_opening_type") == "telescopic":
+                    opening_type_idx = 1
+                door_opening_type_label = st.selectbox(
+                    "Door Opening Type",
+                    options=opening_type_options,
+                    index=opening_type_idx,
+                    key=f"{key_prefix}_door_opening_type",
+                    help="Centre Opening: symmetric panels. Telescopic: asymmetric shorter panel."
+                )
+                door_opening_type = "telescopic" if door_opening_type_label == "Telescopic Opening" else "centre"
+
             else:
                 col_dw, col_dh = st.columns(2)
                 with col_dw:
@@ -413,20 +444,47 @@ def render_lift_config_form(
                         help="Height of the door opening"
                     )
 
-            # Calculate panel length constraints with proper validation
-            min_panel_length = 2 * door_width  # At minimum, must fit the doors
-            default_panel_length = min(2 * door_width + 2 * config.DEFAULT_DOOR_EXTENSION, shaft_width)
-            max_panel_length = int(shaft_width)  # Cannot exceed shaft inner width
+            if door_opening_type == "telescopic":
+                # Telescopic extension inputs
+                default_left = int(0.5 * door_width + config.TELESCOPIC_LEFT_EXTENSION_EXTRA)
+                default_right = config.TELESCOPIC_RIGHT_EXTENSION
+                col_tl, col_tr = st.columns(2)
+                with col_tl:
+                    telescopic_left_ext = st.number_input(
+                        "Left Extension (mm)",
+                        min_value=50, max_value=2000,
+                        value=int(initial_values.get("telescopic_left_ext", default_left)),
+                        step=25, key=f"{key_prefix}_telescopic_left_ext",
+                        help="Extension beyond door width on left side"
+                    )
+                with col_tr:
+                    telescopic_right_ext = st.number_input(
+                        "Right Extension (mm)",
+                        min_value=50, max_value=1000,
+                        value=int(initial_values.get("telescopic_right_ext", default_right)),
+                        step=25, key=f"{key_prefix}_telescopic_right_ext",
+                        help="Extension beyond door width on right side"
+                    )
+                total_panel = telescopic_left_ext + door_width + telescopic_right_ext
+                st.caption(f"Total panel length: {int(total_panel)}mm")
+                # For telescopic, door_extension is not used for drawing
+                door_extension = 0
+                door_panel_length = int(total_panel)
+            else:
+                # Calculate panel length constraints with proper validation
+                min_panel_length = 2 * door_width  # At minimum, must fit the doors
+                default_panel_length = min(2 * door_width + 2 * config.DEFAULT_DOOR_EXTENSION, shaft_width)
+                max_panel_length = int(shaft_width)  # Cannot exceed shaft inner width
 
-            door_panel_length = st.number_input(
-                "Door Panel Length (mm)",
-                min_value=int(min_panel_length),
-                max_value=max_panel_length,
-                value=int(min(initial_values.get("door_panel_length", default_panel_length), max_panel_length)),
-                step=50,
-                key=f"{key_prefix}_door_panel_length",
-                help=f"Total width of door panel rectangle. Max: {max_panel_length}mm (shaft width)"
-            )
+                door_panel_length = st.number_input(
+                    "Door Panel Length (mm)",
+                    min_value=int(min_panel_length),
+                    max_value=max_panel_length,
+                    value=int(min(initial_values.get("door_panel_length", default_panel_length), max_panel_length)),
+                    step=50,
+                    key=f"{key_prefix}_door_panel_length",
+                    help=f"Total width of door panel rectangle. Max: {max_panel_length}mm (shaft width)"
+                )
 
             col_sow, col_soh = st.columns(2)
             with col_sow:
@@ -544,6 +602,7 @@ def render_lift_config_form(
             "finished_car_depth": car_depth,
             "lift_machine_type": machine_type,
             "door_panel_thickness": door_panel_thickness,
+            "door_opening_type": door_opening_type,
         }
         if machine_type == "mrl":
             temp_kwargs["counterweight_bracket_width"] = cw_bracket
@@ -566,8 +625,12 @@ def render_lift_config_form(
                 errors.append(f"Shaft Width ({shaft_width_input}mm) below minimum ({min_sw}mm)")
             if shaft_depth_input < min_sd:
                 errors.append(f"Shaft Depth ({shaft_depth_input}mm) below minimum ({min_sd}mm)")
-            if lift_type == "fire" and shaft_width_input < config.FIRE_LIFT_MIN_SHAFT_WIDTH:
-                errors.append(f"Fire lift shaft width ({shaft_width_input}mm) below minimum ({int(config.FIRE_LIFT_MIN_SHAFT_WIDTH)}mm)")
+            if lift_type == "fire":
+                _fire_min_sw_check = (config.FIRE_LIFT_MIN_SHAFT_WIDTH_TELESCOPIC
+                                      if door_opening_type == "telescopic"
+                                      else config.FIRE_LIFT_MIN_SHAFT_WIDTH)
+                if shaft_width_input < _fire_min_sw_check:
+                    errors.append(f"Fire/Service lift shaft width ({shaft_width_input}mm) below minimum ({int(_fire_min_sw_check)}mm)")
 
             if errors:
                 st.error(" | ".join(errors))
@@ -619,6 +682,9 @@ def render_lift_config_form(
         "mra_cw_bracket_depth": mra_cw_bracket,
         "shaft_width_override": shaft_width_override,
         "shaft_depth_override": shaft_depth_override,
+        "door_opening_type": door_opening_type,
+        "telescopic_left_ext": telescopic_left_ext,
+        "telescopic_right_ext": telescopic_right_ext,
         "has_errors": has_errors,
     }
 
@@ -662,6 +728,14 @@ def build_lift_config(
         kwargs["shaft_width_override"] = lift_data["shaft_width_override"]
     if lift_data.get("shaft_depth_override") is not None:
         kwargs["shaft_depth_override"] = lift_data["shaft_depth_override"]
+
+    # Pass telescopic door parameters
+    if lift_data.get("door_opening_type"):
+        kwargs["door_opening_type"] = lift_data["door_opening_type"]
+    if lift_data.get("telescopic_left_ext") is not None:
+        kwargs["telescopic_left_ext"] = lift_data["telescopic_left_ext"]
+    if lift_data.get("telescopic_right_ext") is not None:
+        kwargs["telescopic_right_ext"] = lift_data["telescopic_right_ext"]
 
     return LiftConfig(**kwargs)
 
@@ -790,7 +864,7 @@ def main():
     with col_preview:
         st.header("Preview")
 
-        generate_btn = st.button("Generate Sketch", type="primary", use_container_width=True)
+        generate_btn = st.button("Generate Sketch", type="primary", width="stretch")
 
         # Check if any lift has dimension errors
         all_lifts = bank1_lifts + bank2_lifts
@@ -852,7 +926,7 @@ def main():
             st.error(st.session_state["generation_error"])
 
         if st.session_state.get("generated_image"):
-            st.image(st.session_state["generated_image"], use_container_width=True)
+            st.image(st.session_state["generated_image"], width="stretch")
 
             # Download button
             st.download_button(
@@ -860,7 +934,7 @@ def main():
                 data=st.session_state["generated_image"],
                 file_name="lift_plan.png",
                 mime="image/png",
-                use_container_width=True,
+                width="stretch",
             )
 
 

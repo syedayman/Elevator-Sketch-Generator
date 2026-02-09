@@ -958,6 +958,7 @@ def _draw_door_inner_details(
     door_y: float,
     door_thickness: float,
     door_width: float,
+    door_opening_center_x: float = None,
 ) -> None:
     """
     Draw inner frame lines and door panels inside a door rectangle.
@@ -969,6 +970,8 @@ def _draw_door_inner_details(
         door_y: Bottom y coordinate of the door rectangle (mm)
         door_thickness: Height/thickness of the door rectangle (mm)
         door_width: Actual door opening width for panel sizing (mm)
+        door_opening_center_x: Center x of actual door opening (for telescopic doors
+            where rect center differs from opening center). If None, uses rect center.
     """
     # Calculate frame line y positions (37.5mm from top/bottom)
     frame_margin = config.LIFT_DOOR_FRAME_MARGIN
@@ -993,7 +996,7 @@ def _draw_door_inner_details(
     )
 
     # Calculate inner panel positions (centered horizontally, total width = door_width)
-    door_center_x = door_rect_left + door_rect_width / 2
+    door_center_x = door_opening_center_x if door_opening_center_x is not None else door_rect_left + door_rect_width / 2
     panel_width = door_width / 2  # Each panel is half the door width
     panel_height = config.LIFT_DOOR_PANEL_HEIGHT
 
@@ -1037,6 +1040,9 @@ def draw_lift_doors(
     door_thickness: float = None,
     door_gap: float = None,
     mirrored: bool = False,
+    door_opening_type: str = "centre",
+    telescopic_left_ext: float = None,
+    telescopic_right_ext: float = None,
 ) -> dict:
     """
     Draw landing door and car door at the bottom of the shaft.
@@ -1073,9 +1079,18 @@ def draw_lift_doors(
         door_gap = config.DEFAULT_DOOR_GAP
 
     # Calculate door rectangle dimensions
-    # Total door width = 2 × door_width + 200mm (e.g., 2 × 1100 + 200 = 2400mm)
-    door_rect_width = 2 * door_width + 2 * door_extension
-    door_rect_left = center_x - door_rect_width / 2
+    if door_opening_type == "telescopic" and telescopic_left_ext is not None and telescopic_right_ext is not None:
+        # Telescopic: asymmetric rectangle around door opening
+        # Left edge = (center_x - door_width/2) - left_ext
+        # Right edge = (center_x + door_width/2) + right_ext
+        door_rect_left = (center_x - door_width / 2) - telescopic_left_ext
+        door_rect_right = (center_x + door_width / 2) + telescopic_right_ext
+        door_rect_width = door_rect_right - door_rect_left
+    else:
+        # Centre opening: symmetric rectangle
+        # Total door width = 2 × door_width + 200mm (e.g., 2 × 1100 + 200 = 2400mm)
+        door_rect_width = 2 * door_width + 2 * door_extension
+        door_rect_left = center_x - door_rect_width / 2
 
     if mirrored:
         # Mirrored: doors extend downward from wall_inner_y
@@ -1103,7 +1118,8 @@ def draw_lift_doors(
 
     # Draw inner details for landing door
     _draw_door_inner_details(
-        ax, door_rect_left, door_rect_width, landing_door_y, door_thickness, door_width
+        ax, door_rect_left, door_rect_width, landing_door_y, door_thickness, door_width,
+        door_opening_center_x=center_x,
     )
 
     # Draw car door rectangle
@@ -1120,7 +1136,8 @@ def draw_lift_doors(
 
     # Draw inner details for car door
     _draw_door_inner_details(
-        ax, door_rect_left, door_rect_width, car_door_y, door_thickness, door_width
+        ax, door_rect_left, door_rect_width, car_door_y, door_thickness, door_width,
+        door_opening_center_x=center_x,
     )
 
     # Return geometry info for car connection

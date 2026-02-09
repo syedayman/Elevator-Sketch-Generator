@@ -20,6 +20,7 @@ DEFAULT_SHARED_WALL_THICKNESS = 200  # Dividing wall between lifts
 # =============================================================================
 
 FIRE_LIFT_MIN_SHAFT_WIDTH = 2700  # Minimum shaft width for fire lifts
+FIRE_LIFT_MIN_SHAFT_WIDTH_TELESCOPIC = 2550  # Minimum shaft width for fire lifts with telescopic doors
 FIRE_LIFT_DOOR_WIDTH = 1200  # Fire lift door width
 
 # =============================================================================
@@ -152,6 +153,11 @@ DEFAULT_DOOR_EXTENSION = 100        # Extension beyond door width on each side (
 DEFAULT_REAR_CLEARANCE = 345        # Default rear clearance (mm)
 MIN_REAR_CLEARANCE = 200            # Minimum allowed rear clearance (mm)
 # Total door width = 2 × door_width + 2 × DEFAULT_DOOR_EXTENSION
+
+# Telescopic Door Parameters (fire lifts only)
+TELESCOPIC_RIGHT_EXTENSION = 150      # Extension beyond door_width on right side (mm)
+TELESCOPIC_LEFT_EXTENSION_EXTRA = 50  # Extra beyond 0.5 * door_width on left side (mm)
+# Left extension formula: 0.5 * door_width + TELESCOPIC_LEFT_EXTENSION_EXTRA
 
 # Door styling
 LIFT_DOOR_FILL_COLOR = "#FFFFFF"    # Light gray fill

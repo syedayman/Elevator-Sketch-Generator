@@ -101,6 +101,11 @@ class LiftConfig:
     door_panel_thickness: float = field(default_factory=lambda: config.DEFAULT_LIFT_DOOR_THICKNESS)
     door_extension: float = field(default_factory=lambda: config.DEFAULT_DOOR_EXTENSION)
 
+    # Telescopic door parameters (fire lifts only)
+    door_opening_type: str = "centre"  # "centre" or "telescopic" (fire lifts only)
+    telescopic_left_ext: Optional[float] = None   # Left extension for telescopic (auto-calculated if None)
+    telescopic_right_ext: Optional[float] = None   # Right extension for telescopic (auto-calculated if None)
+
     @property
     def unfinished_car_width(self) -> float:
         """Unfinished car width = finished + 50mm (25mm each side)."""
@@ -126,7 +131,10 @@ class LiftConfig:
         else:
             width = self.counterweight_bracket_width + self.unfinished_car_width + self.car_bracket_width
         if self.lift_type == "fire":
-            width = max(width, config.FIRE_LIFT_MIN_SHAFT_WIDTH)
+            fire_min = (config.FIRE_LIFT_MIN_SHAFT_WIDTH_TELESCOPIC
+                        if self.door_opening_type == "telescopic"
+                        else config.FIRE_LIFT_MIN_SHAFT_WIDTH)
+            width = max(width, fire_min)
         return width
 
     @property
@@ -219,6 +227,21 @@ class LiftConfig:
             # Set fire lift door width
             self.door_width = config.FIRE_LIFT_DOOR_WIDTH
 
+        # Validate door_opening_type
+        if self.door_opening_type not in ("centre", "telescopic"):
+            errors.append(
+                f"door_opening_type must be 'centre' or 'telescopic', got '{self.door_opening_type}'."
+            )
+        if self.door_opening_type == "telescopic" and self.lift_type != "fire":
+            errors.append("Telescopic door opening is only available for fire lifts.")
+
+        # Auto-calculate telescopic extensions if not provided
+        if self.door_opening_type == "telescopic":
+            if self.telescopic_left_ext is None:
+                self.telescopic_left_ext = 0.5 * self.door_width + config.TELESCOPIC_LEFT_EXTENSION_EXTRA
+            if self.telescopic_right_ext is None:
+                self.telescopic_right_ext = config.TELESCOPIC_RIGHT_EXTENSION
+
         # Validate bracket dimensions meet minimums
         if self.lift_machine_type == "mrl":
             if self.counterweight_bracket_width < config.DEFAULT_COUNTERWEIGHT_BRACKET_WIDTH:
@@ -256,11 +279,15 @@ class LiftConfig:
                     f"({int(self.min_shaft_width)}mm). Minimum = {self._width_breakdown_str()}"
                 )
             # Fire lift minimum shaft width
-            if self.lift_type == "fire" and self.shaft_width_override < config.FIRE_LIFT_MIN_SHAFT_WIDTH:
-                errors.append(
-                    f"Fire lift Shaft Width ({int(self.shaft_width_override)}mm) is below "
-                    f"fire lift minimum ({int(config.FIRE_LIFT_MIN_SHAFT_WIDTH)}mm)."
-                )
+            if self.lift_type == "fire":
+                fire_min_w = (config.FIRE_LIFT_MIN_SHAFT_WIDTH_TELESCOPIC
+                              if self.door_opening_type == "telescopic"
+                              else config.FIRE_LIFT_MIN_SHAFT_WIDTH)
+                if self.shaft_width_override < fire_min_w:
+                    errors.append(
+                        f"Fire lift Shaft Width ({int(self.shaft_width_override)}mm) is below "
+                        f"fire lift minimum ({int(fire_min_w)}mm)."
+                    )
             # Structural opening must fit within shaft width
             if self.shaft_width_override < self.structural_opening_width:
                 errors.append(
@@ -876,6 +903,9 @@ class LiftShaftSketch:
                 door_width=lift_config.door_width,
                 door_extension=lift_config.door_extension,
                 door_thickness=lift_config.door_panel_thickness,
+                door_opening_type=lift_config.door_opening_type,
+                telescopic_left_ext=lift_config.telescopic_left_ext,
+                telescopic_right_ext=lift_config.telescopic_right_ext,
             )
 
         # Draw counterweight bracket only (car bracket not shown)
@@ -1013,6 +1043,9 @@ class LiftShaftSketch:
                 door_width=lift_config.door_width,
                 door_extension=lift_config.door_extension,
                 door_thickness=lift_config.door_panel_thickness,
+                door_opening_type=lift_config.door_opening_type,
+                telescopic_left_ext=lift_config.telescopic_left_ext,
+                telescopic_right_ext=lift_config.telescopic_right_ext,
             )
         # Position car so bottom touches top of car door (like MRL)
         # Door area = 2 * door_thickness + door_gap
@@ -1189,16 +1222,6 @@ class LiftShaftSketch:
             ha="center", va="top",
             fontsize=config.DIMENSION_TEXT_SIZE,
             color=config.DIMENSION_COLOR,
-        )
-
-        # Wall thickness dimension (left side, bottom, level 3)
-        draw_dimension_line(
-            ax,
-            start=(0, 0),
-            end=(wt, 0),
-            text=f"{int(wt)}",
-            offset=-850,
-            orientation="horizontal",
         )
 
         # Draw bracket and car dimensions if using enhanced API
@@ -1892,16 +1915,6 @@ class LiftShaftSketch:
             orientation="vertical",
         )
 
-        # Wall thickness dimension (bottom left, level 4)
-        draw_dimension_line(
-            ax,
-            start=(0, 0),
-            end=(wt, 0),
-            text=f"{int(wt)}",
-            offset=-1050,
-            orientation="horizontal",
-        )
-
         # Separator dimension (top, level 3 - same as unfinished car width)
         if self.num_lifts > 1:
             shared_wall_x = wt + self._shaft_widths[0]
@@ -2336,6 +2349,9 @@ class LiftShaftSketch:
                 door_extension=lift_config.door_extension,
                 door_thickness=lift_config.door_panel_thickness,
                 mirrored=True,  # Draw doors facing down (into shaft)
+                door_opening_type=lift_config.door_opening_type,
+                telescopic_left_ext=lift_config.telescopic_left_ext,
+                telescopic_right_ext=lift_config.telescopic_right_ext,
             )
 
         # Draw counterweight bracket
@@ -2459,6 +2475,9 @@ class LiftShaftSketch:
                 door_extension=lift_config.door_extension,
                 door_thickness=lift_config.door_panel_thickness,
                 mirrored=True,
+                door_opening_type=lift_config.door_opening_type,
+                telescopic_left_ext=lift_config.telescopic_left_ext,
+                telescopic_right_ext=lift_config.telescopic_right_ext,
             )
 
         # Draw brackets
@@ -3093,22 +3112,3 @@ class LiftShaftSketch:
                     orientation="horizontal",
                 )
 
-        # Wall thickness dimension
-        if dim_above:
-            draw_dimension_line(
-                ax,
-                start=(x_offset, front_wall_y),
-                end=(x_offset + wt, front_wall_y),
-                text=f"{int(wt)}",
-                offset=-1050,
-                orientation="horizontal",
-            )
-        else:
-            draw_dimension_line(
-                ax,
-                start=(x_offset, front_wall_y + wt),
-                end=(x_offset + wt, front_wall_y + wt),
-                text=f"{int(wt)}",
-                offset=1050,
-                orientation="horizontal",
-            )
