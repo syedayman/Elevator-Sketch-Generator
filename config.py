@@ -238,7 +238,8 @@ MRL_CW_SIDE_CAR_BRACKET_HEIGHT = 450  # Same height as existing car bracket
 # =============================================================================
 
 # Vertical dimensions
-DEFAULT_PIT_DEPTH = 200              # Pit depth below lowest landing
+DEFAULT_PIT_SLAB = 200               # Pit slab thickness (mm)
+DEFAULT_PIT_DEPTH = 1200             # Pit depth from lowest landing to pit floor (mm)
 DEFAULT_OVERHEAD_CLEARANCE = 4200    # Overhead clearance above highest landing
 DEFAULT_TRAVEL_HEIGHT = 30000        # Travel height (total vertical travel)
 DEFAULT_FLOOR_HEIGHT = 3200          # Typical floor-to-floor height

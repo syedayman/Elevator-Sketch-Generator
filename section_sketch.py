@@ -48,6 +48,7 @@ except ImportError:
 class SectionConfig:
     """Configuration for section view parameters."""
 
+    pit_slab: float = field(default_factory=lambda: config.DEFAULT_PIT_SLAB)
     pit_depth: float = field(default_factory=lambda: config.DEFAULT_PIT_DEPTH)
     overhead_clearance: float = field(default_factory=lambda: config.DEFAULT_OVERHEAD_CLEARANCE)
     travel_height: float = field(default_factory=lambda: config.DEFAULT_TRAVEL_HEIGHT)
@@ -64,7 +65,7 @@ class SectionConfig:
     @property
     def total_shaft_height(self) -> float:
         """Total height from pit bottom to overhead top."""
-        return self.pit_depth + self.travel_height + self.overhead_clearance
+        return self.pit_slab + self.pit_depth + self.travel_height + self.overhead_clearance
 
     @property
     def num_floors(self) -> int:
@@ -139,6 +140,7 @@ class LiftSectionSketch:
             self.machine_type = "mrl"
 
         # Section-specific parameters
+        self.pit_slab = self.section_config.pit_slab
         self.pit_depth = self.section_config.pit_depth
         self.overhead_clearance = self.section_config.overhead_clearance
         self.travel_height = self.section_config.travel_height
@@ -154,21 +156,22 @@ class LiftSectionSketch:
         self.total_width = self.shaft_width + 2 * self.wall_thickness
 
         # Vertical geometry
-        # Ground floor level is at y=0 in the drawing
+        # Ground floor level is at y=0 in the drawing (top of pit slab)
         self.ground_floor_y = 0
-        self.pit_bottom_y = -self.pit_depth
+        self.pit_bottom_y = -self.pit_slab
         self.top_floor_y = self.travel_height
         self.overhead_top_y = self.top_floor_y + self.overhead_clearance
 
         # For simplified section view with break lines:
         # We show ground floor zone, break lines, and top floor zone
-        self.ground_zone_height = 4000  # 4m zone around ground floor
+        # Ground zone must accommodate pit_depth (lowest landing slab position)
+        self.ground_zone_height = max(4000, self.pit_depth + 1000)
         self.top_zone_height = 5000  # 5m zone around top floor (includes machine)
         self.break_zone_height = 1500  # Height for break line area
 
         # Total drawing height (simplified)
         self.drawing_height = (
-            self.pit_depth +
+            self.pit_slab +
             self.ground_zone_height +
             self.break_zone_height +
             self.top_zone_height
@@ -310,7 +313,7 @@ class LiftSectionSketch:
         sw = self.shaft_width
 
         # Calculate y positions for the simplified view
-        pit_bottom = -self.pit_depth
+        pit_bottom = -self.pit_slab
         ground_level = 0
         break_line_bottom = self.ground_zone_height
         break_line_top = break_line_bottom + self.break_zone_height
@@ -320,20 +323,11 @@ class LiftSectionSketch:
 
         # Floor slab positions (needed for structural openings)
         slab_thickness = wt  # Same thickness as walls (200mm)
-        ground_floor_slab_y = ground_level + 1200  # Above pit edge with space for dimension labels
+        ground_floor_slab_y = ground_level + self.pit_depth
 
         # Skip shaft interior background - keep it white
 
-        # Draw pit area
-        if display_options["show_pit"]:
-            draw_section_pit(
-                ax,
-                x=wt,
-                y=ground_level,
-                width=sw,
-                depth=self.pit_depth,
-                show_hatching=display_options["show_hatching"],
-            )
+        # Draw pit area (pit slab is drawn as the bottom wall below)
 
         # Draw side walls (left and right)
         # Left wall - segmented with structural openings at ground and top floors
@@ -401,9 +395,9 @@ class LiftSectionSketch:
             ax, wt, machine_room_top - wt, sw, wt,
             display_options["show_hatching"]
         )
-        # Bottom wall (closing the shaft at pit bottom)
+        # Bottom wall / pit slab (single wall with pit_slab thickness)
         draw_wall_section(
-            ax, wt, pit_bottom, sw, wt,
+            ax, wt, pit_bottom, sw, self.pit_slab,
             display_options["show_hatching"]
         )
 
@@ -639,12 +633,12 @@ class LiftSectionSketch:
         )
 
         # Vertical dimensions on left side (four stacked dimensions)
-        # 1. Pit Slab (bottom wall thickness - from pit bottom to ground level)
+        # 1. Pit Slab (bottom slab thickness - from pit bottom to ground level)
         draw_dimension_line(
             ax,
             start=(0, pit_bottom),
             end=(0, ground_level),
-            text="Pit Slab",
+            text=f"Pit Slab {int(ground_level - pit_bottom)}",
             offset=-1300,
             orientation="vertical",
         )
@@ -660,21 +654,22 @@ class LiftSectionSketch:
         )
 
         # 3. Travel (from ground floor slab top to top floor slab top)
+        # Use actual travel_height from config (visual positions are compressed by break lines)
         draw_dimension_line(
             ax,
             start=(0, ground_floor_slab_y),
             end=(0, top_level),
-            text=f"Travel {int(top_level - ground_floor_slab_y)}",
+            text=f"Travel {int(self.travel_height)}",
             offset=-1000,
             orientation="vertical",
         )
 
-        # 4. Headroom (from top floor slab top to bottom of overhead slab)
+        # 4. Headroom (from top floor slab top to inner edge of top wall)
         draw_dimension_line(
             ax,
             start=(0, top_level),
             end=(0, overhead_top - slab_thickness),
-            text=f"Headroom {int(overhead_top - slab_thickness - top_level)}",
+            text=f"Headroom {int(self.overhead_clearance)}",
             offset=-1000,
             orientation="vertical",
         )

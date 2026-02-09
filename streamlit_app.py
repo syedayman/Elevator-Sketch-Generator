@@ -4,6 +4,7 @@ Streamlit web app for generating lift shaft plan sketches.
 
 import streamlit as st
 from shaft_sketch import LiftShaftSketch, LiftConfig, FIRE_LIFT_CABIN_SIZES
+from section_sketch import LiftSectionSketch, SectionConfig
 import config
 
 # Fire lift cabin size options for dropdown
@@ -740,21 +741,136 @@ def build_lift_config(
     return LiftConfig(**kwargs)
 
 
+def render_section_config_form(machine_type: str) -> dict:
+    """
+    Render configuration form for section view.
+
+    Returns dict with section-specific configuration values.
+    """
+    key_prefix = "section"
+
+    # Shaft / wall dimensions
+    col_sw, col_wt = st.columns(2)
+    with col_sw:
+        shaft_width = st.number_input(
+            "Shaft Width (mm)",
+            min_value=500, max_value=6000,
+            value=int(config.DEFAULT_SHAFT_WIDTH),
+            step=10, key=f"{key_prefix}_shaft_width",
+            help="Internal shaft width (shown as 'Shaft Depth' in section view)"
+        )
+    with col_wt:
+        wall_thickness = st.number_input(
+            "Wall Thickness (mm)",
+            min_value=100, max_value=500,
+            value=int(config.DEFAULT_WALL_THICKNESS),
+            step=25, key=f"{key_prefix}_wall_thickness",
+            help="RCC wall / pit slab thickness"
+        )
+
+    # Pit slab and pit depth
+    col_ps, col_pit = st.columns(2)
+    with col_ps:
+        pit_slab = st.number_input(
+            "Pit Slab (mm)",
+            min_value=100, max_value=500,
+            value=int(config.DEFAULT_PIT_SLAB),
+            step=25, key=f"{key_prefix}_pit_slab",
+            help="Thickness of the concrete slab at pit bottom"
+        )
+    with col_pit:
+        pit_depth = st.number_input(
+            "Pit Depth (mm)",
+            min_value=500, max_value=3000,
+            value=int(config.DEFAULT_PIT_DEPTH),
+            step=50, key=f"{key_prefix}_pit_depth",
+            help="Depth from lowest landing to pit floor"
+        )
+
+    # Travel height and headroom
+    col_travel, col_oh = st.columns(2)
+    with col_travel:
+        travel_height = st.number_input(
+            "Travel Height (mm)",
+            min_value=5000, max_value=200000,
+            value=int(config.DEFAULT_TRAVEL_HEIGHT),
+            step=1000, key=f"{key_prefix}_travel_height",
+        )
+    with col_oh:
+        overhead_clearance = st.number_input(
+            "Headroom (mm)",
+            min_value=2000, max_value=10000,
+            value=int(config.DEFAULT_OVERHEAD_CLEARANCE),
+            step=100, key=f"{key_prefix}_overhead_clearance",
+        )
+
+    # Door opening height and structural opening height
+    col_dh, col_soh = st.columns(2)
+    with col_dh:
+        door_height = st.number_input(
+            "Door Opening Height (mm)",
+            min_value=1500, max_value=3500,
+            value=int(config.DEFAULT_DOOR_HEIGHT),
+            step=50, key=f"{key_prefix}_door_height",
+        )
+    with col_soh:
+        structural_opening_height = st.number_input(
+            "Structural Opening Height (mm)",
+            min_value=1500, max_value=4000,
+            value=int(config.DEFAULT_STRUCTURAL_OPENING_HEIGHT),
+            step=50, key=f"{key_prefix}_structural_opening_height",
+        )
+
+    # Machine Room Height (MRA only)
+    machine_room_height = None
+    if machine_type == "mra":
+        col_mrh, _ = st.columns(2)
+        with col_mrh:
+            machine_room_height = st.number_input(
+                "Machine Room Height (mm)",
+                min_value=2000, max_value=6000,
+                value=int(config.DEFAULT_MACHINE_ROOM_HEIGHT),
+                step=100, key=f"{key_prefix}_machine_room_height",
+            )
+
+    return {
+        "shaft_width": shaft_width,
+        "wall_thickness": wall_thickness,
+        "pit_slab": pit_slab,
+        "pit_depth": pit_depth,
+        "travel_height": travel_height,
+        "overhead_clearance": overhead_clearance,
+        "door_height": door_height,
+        "structural_opening_height": structural_opening_height,
+        "machine_room_height": machine_room_height,
+    }
+
+
 def main():
     st.set_page_config(
-        page_title="Lift Plan Sketch Generator",
+        page_title="Lift Sketch Generator",
         page_icon="🏗️",
         layout="wide",
         initial_sidebar_state="expanded",
     )
 
-    st.title("Lift Plan Sketch Generator")
+    st.title("Lift Sketch Generator")
 
     # Sidebar configuration
     with st.sidebar:
         st.header("Configuration")
 
-        # Machine type
+        # View selector
+        active_view = st.radio(
+            "View",
+            options=["Plan View", "Section View"],
+            index=0,
+            key="active_view",
+        )
+
+        st.divider()
+
+        # Machine type (shared by both views)
         machine_type = st.radio(
             "Machine Type",
             options=["mrl", "mra"],
@@ -763,179 +879,264 @@ def main():
             key="machine_type",
         )
 
-        # Arrangement
-        arrangement = st.radio(
-            "Arrangement",
-            options=["Inline", "Facing"],
-            index=0,
-            key="arrangement",
-        )
+        if active_view == "Plan View":
+            st.divider()
 
-        st.divider()
+            # Plan view settings
+            arrangement = st.radio(
+                "Arrangement",
+                options=["Inline", "Facing"],
+                index=0,
+                key="arrangement",
+            )
 
-        # Number of lifts
-        num_lifts_bank1 = st.number_input(
-            "Number of Lifts (Bank 1)",
-            min_value=1,
-            max_value=4,
-            value=1,
-            key="num_lifts_bank1",
-        )
-
-        num_lifts_bank2 = 0
-        if arrangement == "Facing":
-            num_lifts_bank2 = st.number_input(
-                "Number of Lifts (Bank 2)",
+            num_lifts_bank1 = st.number_input(
+                "Number of Lifts (Bank 1)",
                 min_value=1,
                 max_value=4,
-                value=2,
-                key="num_lifts_bank2",
+                value=1,
+                key="num_lifts_bank1",
             )
 
-        st.divider()
-        st.subheader("Display Options")
+            num_lifts_bank2 = 0
+            if arrangement == "Facing":
+                num_lifts_bank2 = st.number_input(
+                    "Number of Lifts (Bank 2)",
+                    min_value=1,
+                    max_value=4,
+                    value=2,
+                    key="num_lifts_bank2",
+                )
 
-        show_dimensions = st.checkbox("Show Dimensions", value=True, key="show_dimensions")
-        show_hatching = st.checkbox("Show Hatching", value=True, key="show_hatching")
-        show_centerlines = st.checkbox("Show Centerlines", value=False, key="show_centerlines")
-        show_capacity = st.checkbox("Show Capacity Label", value=False, key="show_capacity")
-        show_accessibility = st.checkbox("Show Accessibility Symbol", value=False, key="show_accessibility")
-        show_brackets = st.checkbox("Show Brackets", value=True, key="show_brackets")
-        show_lift_doors = st.checkbox("Show Lift Doors", value=True, key="show_lift_doors")
+            st.divider()
+            st.subheader("Display Options")
+            show_dimensions = st.checkbox("Show Dimensions", value=True, key="show_dimensions")
+            show_hatching = st.checkbox("Show Hatching", value=True, key="show_hatching")
+            show_centerlines = st.checkbox("Show Centerlines", value=False, key="show_centerlines")
+            show_capacity = st.checkbox("Show Capacity Label", value=False, key="show_capacity")
+            show_accessibility = st.checkbox("Show Accessibility Symbol", value=False, key="show_accessibility")
+            show_brackets = st.checkbox("Show Brackets", value=True, key="show_brackets")
+            show_lift_doors = st.checkbox("Show Lift Doors", value=True, key="show_lift_doors")
 
-    # Main area - lift configuration forms
-    col_config, col_preview = st.columns([1, 1])
-
-    with col_config:
-        st.header("Lift Configuration")
-
-        # Bank 1 lift configurations
-        st.subheader("Bank 1")
-        bank1_lifts = []
-        for i in range(num_lifts_bank1):
-            lift_data = render_lift_config_form(i, "bank1", machine_type, show_capacity_input=show_capacity)
-            bank1_lifts.append(lift_data)
-
-        # Bank 2 configurations (if facing)
-        bank2_lifts = []
-        if arrangement == "Facing":
-            st.subheader("Bank 2")
-            for i in range(num_lifts_bank2):
-                lift_data = render_lift_config_form(i, "bank2", machine_type, show_capacity_input=show_capacity)
-                bank2_lifts.append(lift_data)
-
-        st.divider()
-
-        # Shaft configuration
-        st.subheader("Shaft Configuration")
-
-        col_shaft1, col_shaft2 = st.columns(2)
-        with col_shaft1:
-            wall_thickness = st.number_input(
-                "Wall Thickness (mm)",
-                min_value=100,
-                max_value=500,
-                value=int(config.DEFAULT_WALL_THICKNESS),
-                step=25,
-                key="wall_thickness",
-            )
-
-        with col_shaft2:
-            common_shaft = st.checkbox(
-                "Common Shaft",
-                value=False,
-                key="common_shaft",
-                help="If checked, uses steel beam separator (150mm). Otherwise uses RCC wall (200mm).",
-            )
-
-        if arrangement == "Facing":
-            lobby_width = st.number_input(
-                "Lobby Width (mm)",
-                min_value=2000,
-                max_value=10000,
-                value=int(config.DEFAULT_LOBBY_WIDTH),
-                step=100,
-                key="lobby_width",
-            )
         else:
-            lobby_width = config.DEFAULT_LOBBY_WIDTH
+            st.divider()
+            st.subheader("Display Options")
+            section_show_dimensions = st.checkbox("Show Dimensions", value=True, key="section_show_dimensions")
+            section_show_hatching = st.checkbox("Show Hatching", value=True, key="section_show_hatching")
+            section_show_break_lines = st.checkbox("Show Break Lines", value=True, key="section_show_break_lines")
+            section_show_machine = st.checkbox("Show Machine Image", value=True, key="section_show_machine")
 
-    # Preview column
-    with col_preview:
-        st.header("Preview")
+    # ── Plan View ──
+    if active_view == "Plan View":
+        col_config, col_preview = st.columns([1, 1])
 
-        generate_btn = st.button("Generate Sketch", type="primary", width="stretch")
+        with col_config:
+            st.header("Lift Configuration")
 
-        # Check if any lift has dimension errors
-        all_lifts = bank1_lifts + bank2_lifts
-        any_errors = any(ld.get("has_errors") for ld in all_lifts)
+            # Bank 1 lift configurations
+            st.subheader("Bank 1")
+            bank1_lifts = []
+            for i in range(num_lifts_bank1):
+                lift_data = render_lift_config_form(i, "bank1", machine_type, show_capacity_input=show_capacity)
+                bank1_lifts.append(lift_data)
 
-        if generate_btn and any_errors:
-            st.error("Fix dimension errors before generating.")
-        elif generate_btn:
-            try:
-                # Build LiftConfig objects for Bank 1
-                lift_configs = []
-                for lift_data in bank1_lifts:
-                    lc = build_lift_config(lift_data, machine_type, wall_thickness)
-                    lift_configs.append(lc)
+            # Bank 2 configurations (if facing)
+            bank2_lifts = []
+            if arrangement == "Facing":
+                st.subheader("Bank 2")
+                for i in range(num_lifts_bank2):
+                    lift_data = render_lift_config_form(i, "bank2", machine_type, show_capacity_input=show_capacity)
+                    bank2_lifts.append(lift_data)
 
-                # Build LiftConfig objects for Bank 2 (if facing)
-                lift_configs_bank2 = None
-                if arrangement == "Facing" and bank2_lifts:
-                    lift_configs_bank2 = []
-                    for lift_data in bank2_lifts:
+            st.divider()
+
+            # Shaft configuration
+            st.subheader("Shaft Configuration")
+
+            col_shaft1, col_shaft2 = st.columns(2)
+            with col_shaft1:
+                wall_thickness = st.number_input(
+                    "Wall Thickness (mm)",
+                    min_value=100,
+                    max_value=500,
+                    value=int(config.DEFAULT_WALL_THICKNESS),
+                    step=25,
+                    key="wall_thickness",
+                )
+
+            with col_shaft2:
+                common_shaft = st.checkbox(
+                    "Common Shaft",
+                    value=False,
+                    key="common_shaft",
+                    help="If checked, uses steel beam separator (150mm). Otherwise uses RCC wall (200mm).",
+                )
+
+            if arrangement == "Facing":
+                lobby_width = st.number_input(
+                    "Lobby Width (mm)",
+                    min_value=2000,
+                    max_value=10000,
+                    value=int(config.DEFAULT_LOBBY_WIDTH),
+                    step=100,
+                    key="lobby_width",
+                )
+            else:
+                lobby_width = config.DEFAULT_LOBBY_WIDTH
+
+        # Preview column
+        with col_preview:
+            st.header("Preview")
+
+            generate_btn = st.button("Generate Sketch", type="primary", width="stretch", key="plan_generate")
+
+            # Check if any lift has dimension errors
+            all_lifts = bank1_lifts + bank2_lifts
+            any_errors = any(ld.get("has_errors") for ld in all_lifts)
+
+            if generate_btn and any_errors:
+                st.error("Fix dimension errors before generating.")
+            elif generate_btn:
+                try:
+                    # Build LiftConfig objects for Bank 1
+                    lift_configs = []
+                    for lift_data in bank1_lifts:
                         lc = build_lift_config(lift_data, machine_type, wall_thickness)
-                        lift_configs_bank2.append(lc)
+                        lift_configs.append(lc)
 
-                # Create sketch
-                sketch = LiftShaftSketch(
-                    lifts=lift_configs,
-                    lifts_bank2=lift_configs_bank2,
-                    lobby_width=lobby_width if arrangement == "Facing" else None,
-                    is_common_shaft=common_shaft,
-                    wall_thickness=wall_thickness,
+                    # Build LiftConfig objects for Bank 2 (if facing)
+                    lift_configs_bank2 = None
+                    if arrangement == "Facing" and bank2_lifts:
+                        lift_configs_bank2 = []
+                        for lift_data in bank2_lifts:
+                            lc = build_lift_config(lift_data, machine_type, wall_thickness)
+                            lift_configs_bank2.append(lc)
+
+                    # Create sketch
+                    sketch = LiftShaftSketch(
+                        lifts=lift_configs,
+                        lifts_bank2=lift_configs_bank2,
+                        lobby_width=lobby_width if arrangement == "Facing" else None,
+                        is_common_shaft=common_shaft,
+                        wall_thickness=wall_thickness,
+                    )
+
+                    # Generate PNG bytes
+                    img_bytes = sketch.to_bytes(
+                        show_hatching=show_hatching,
+                        show_dimensions=show_dimensions,
+                        show_centerlines=show_centerlines,
+                        show_car_interior=True,
+                        show_brackets=show_brackets,
+                        show_door_panels=True,
+                        show_capacity=show_capacity,
+                        show_accessibility=show_accessibility,
+                        show_lift_doors=show_lift_doors,
+                    )
+
+                    # Store in session state
+                    st.session_state["generated_image"] = img_bytes
+                    st.session_state["generation_error"] = None
+
+                except ValueError as e:
+                    st.session_state["generation_error"] = str(e)
+                    st.session_state["generated_image"] = None
+                except Exception as e:
+                    st.session_state["generation_error"] = f"Unexpected error: {str(e)}"
+                    st.session_state["generated_image"] = None
+
+            # Display image or error
+            if st.session_state.get("generation_error"):
+                st.error(st.session_state["generation_error"])
+
+            if st.session_state.get("generated_image"):
+                st.image(st.session_state["generated_image"], width="stretch")
+
+                # Download button
+                st.download_button(
+                    label="Download PNG",
+                    data=st.session_state["generated_image"],
+                    file_name="lift_plan.png",
+                    mime="image/png",
+                    width="stretch",
                 )
 
-                # Generate PNG bytes
-                img_bytes = sketch.to_bytes(
-                    show_hatching=show_hatching,
-                    show_dimensions=show_dimensions,
-                    show_centerlines=show_centerlines,
-                    show_car_interior=True,
-                    show_brackets=show_brackets,
-                    show_door_panels=True,
-                    show_capacity=show_capacity,
-                    show_accessibility=show_accessibility,
-                    show_lift_doors=show_lift_doors,
-                )
+    # ── Section View ──
+    else:
+        col_section_config, col_section_preview = st.columns([1, 1])
 
-                # Store in session state
-                st.session_state["generated_image"] = img_bytes
-                st.session_state["generation_error"] = None
+        with col_section_config:
+            st.header("Section Configuration")
+            section_form = render_section_config_form(machine_type)
 
-            except ValueError as e:
-                st.session_state["generation_error"] = str(e)
-                st.session_state["generated_image"] = None
-            except Exception as e:
-                st.session_state["generation_error"] = f"Unexpected error: {str(e)}"
-                st.session_state["generated_image"] = None
+        with col_section_preview:
+            st.header("Preview")
 
-        # Display image or error
-        if st.session_state.get("generation_error"):
-            st.error(st.session_state["generation_error"])
-
-        if st.session_state.get("generated_image"):
-            st.image(st.session_state["generated_image"], width="stretch")
-
-            # Download button
-            st.download_button(
-                label="Download PNG",
-                data=st.session_state["generated_image"],
-                file_name="lift_plan.png",
-                mime="image/png",
-                width="stretch",
+            section_generate_btn = st.button(
+                "Generate Section", type="primary", width="stretch", key="section_generate"
             )
+
+            if section_generate_btn:
+                try:
+                    # Build LiftConfig for section view
+                    section_lift_config = LiftConfig(
+                        lift_machine_type=machine_type,
+                        wall_thickness=section_form["wall_thickness"],
+                        door_height=section_form["door_height"],
+                        structural_opening_height=section_form["structural_opening_height"],
+                        shaft_width_override=section_form["shaft_width"],
+                    )
+
+                    # Build SectionConfig
+                    section_kwargs = {
+                        "pit_slab": section_form["pit_slab"],
+                        "pit_depth": section_form["pit_depth"],
+                        "overhead_clearance": section_form["overhead_clearance"],
+                        "travel_height": section_form["travel_height"],
+                    }
+                    if machine_type == "mra" and section_form["machine_room_height"] is not None:
+                        section_kwargs["machine_room_height"] = section_form["machine_room_height"]
+
+                    section_cfg = SectionConfig(**section_kwargs)
+
+                    # Create section sketch
+                    section_sketch = LiftSectionSketch(
+                        lift_config=section_lift_config,
+                        section_config=section_cfg,
+                    )
+
+                    # Generate PNG bytes
+                    section_img_bytes = section_sketch.to_bytes(
+                        show_hatching=section_show_hatching,
+                        show_dimensions=section_show_dimensions,
+                        show_break_lines=section_show_break_lines,
+                        show_mrl_machine=section_show_machine,
+                    )
+
+                    st.session_state["section_generated_image"] = section_img_bytes
+                    st.session_state["section_generation_error"] = None
+
+                except ValueError as e:
+                    st.session_state["section_generation_error"] = str(e)
+                    st.session_state["section_generated_image"] = None
+                except Exception as e:
+                    st.session_state["section_generation_error"] = f"Unexpected error: {str(e)}"
+                    st.session_state["section_generated_image"] = None
+
+            # Display section image or error
+            if st.session_state.get("section_generation_error"):
+                st.error(st.session_state["section_generation_error"])
+
+            if st.session_state.get("section_generated_image"):
+                st.image(st.session_state["section_generated_image"], width="stretch")
+
+                st.download_button(
+                    label="Download PNG",
+                    data=st.session_state["section_generated_image"],
+                    file_name="lift_section.png",
+                    mime="image/png",
+                    width="stretch",
+                )
 
 
 if __name__ == "__main__":
