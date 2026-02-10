@@ -853,11 +853,10 @@ def render_section_config_form(machine_type: str) -> dict:
     col_sw, col_wt = st.columns(2)
     with col_sw:
         shaft_width = st.number_input(
-            "Shaft Width (mm)",
+            "Shaft Depth (mm)",
             min_value=500, max_value=6000,
             value=int(config.DEFAULT_SHAFT_WIDTH),
-            step=10, key=f"{key_prefix}_shaft_width",
-            help="Internal shaft width (shown as 'Shaft Depth' in section view)"
+            step=10, key=f"{key_prefix}_shaft_width"
         )
     with col_wt:
         wall_thickness = st.number_input(

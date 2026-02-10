@@ -687,7 +687,7 @@ class LiftSectionSketch:
         # Add floor labels (positioned below slab levels to avoid overlap with structural opening dimensions)
         ax.text(
             -200, ground_floor_slab_y - slab_thickness - 100,
-            "Bottom most\nserving level",
+            "Bottom-most\nLanding FFL",
             ha="right", va="top",
             fontsize=config.DIMENSION_TEXT_SIZE,
             color=config.DIMENSION_COLOR,
