@@ -918,19 +918,27 @@ class LiftShaftSketch:
                 cw_bracket_x = shaft_x + cb_width + uc_width
                 draw_counterweight_bracket(ax, cw_bracket_x, bracket_y, cwb_width, bracket_height, align="right")
 
+            # Compute car guide rail outer edges for dynamic bracket widths
+            # Guide rails are T-shaped symbols extending outward from unfinished car edges
+            rail_protrusion = config.GUIDE_RAIL_BOX_WIDTH + config.GUIDE_RAIL_STEM_LENGTH + config.GUIDE_RAIL_BAR_THICKNESS
+            car_left_rail = car_center_x - uc_width / 2 - rail_protrusion
+            car_right_rail = car_center_x + uc_width / 2 + rail_protrusion
+
             # Draw car bracket box (blue box on opposite side of counterweight)
-            # Positioned against shaft wall
+            # Dynamic width: extends from shaft wall to car guide rail outer edge
             car_bracket_box_y = shaft_y + (sd - config.CAR_BRACKET_BOX_HEIGHT) / 2
             if not mirror:
-                # Normal: car bracket on right side - against right shaft wall
-                car_bracket_box_x = shaft_x + sw - config.CAR_BRACKET_BOX_WIDTH
+                # Normal: car bracket on right side - from right rail outer edge to right shaft wall
+                car_bracket_box_x = car_right_rail
+                car_bracket_box_w = shaft_x + sw - car_right_rail
             else:
-                # Mirrored: car bracket on left side - against left shaft wall
+                # Mirrored: car bracket on left side - from left shaft wall to left rail outer edge
                 car_bracket_box_x = shaft_x
+                car_bracket_box_w = car_left_rail - shaft_x
 
             ax.add_patch(Rectangle(
                 (car_bracket_box_x, car_bracket_box_y),
-                config.CAR_BRACKET_BOX_WIDTH,
+                car_bracket_box_w,
                 config.CAR_BRACKET_BOX_HEIGHT,
                 facecolor=config.CAR_BRACKET_BOX_COLOR,
                 edgecolor="#000000",
@@ -939,18 +947,19 @@ class LiftShaftSketch:
             ))
 
             # Draw CW-side car bracket (small bracket in gap between CW box and rail guide)
-            # This bracket is positioned right after the CW box, before the car's rail guide
+            # Dynamic width: extends from CW box inner edge to car rail edge
             cw_side_bracket_y = shaft_y + (sd - config.MRL_CW_SIDE_CAR_BRACKET_HEIGHT) / 2
             if not mirror:
-                # Normal: CW box right edge is at shaft_x + (CW_BOX_WIDTH - CW_FRAME_THICKNESS)
+                # Normal: CW box right edge to car left rail
                 cw_side_bracket_x = shaft_x + (config.CW_BOX_WIDTH - config.CW_FRAME_THICKNESS)
+                cw_side_bracket_w = car_left_rail - cw_side_bracket_x
             else:
-                # Mirrored: CW is on right, bracket goes between car right rail and CW box left edge
-                # CW box left edge: shaft_x + cb_width + uc_width + cwb_width - (CW_BOX_WIDTH - CW_FRAME_THICKNESS)
-                cw_box_left_edge = shaft_x + cb_width + uc_width + cwb_width - (config.CW_BOX_WIDTH - config.CW_FRAME_THICKNESS)
-                cw_side_bracket_x = cw_box_left_edge - config.MRL_CW_SIDE_CAR_BRACKET_WIDTH
+                # Mirrored: CW is on right, bracket from car right rail to CW box left edge
+                cw_box_left_edge = shaft_x + sw - (config.CW_BOX_WIDTH - config.CW_FRAME_THICKNESS)
+                cw_side_bracket_x = car_right_rail
+                cw_side_bracket_w = cw_box_left_edge - car_right_rail
 
-            draw_car_bracket_cw_side(ax, cw_side_bracket_x, cw_side_bracket_y)
+            draw_car_bracket_cw_side(ax, cw_side_bracket_x, cw_side_bracket_y, width=cw_side_bracket_w)
 
         # Draw lift car - position depends on mirror flag
         if display_options["show_car_interior"]:
@@ -1064,6 +1073,10 @@ class LiftShaftSketch:
             )
 
             # Draw car brackets on both left and right sides (at car center height)
+            # Dynamic widths: extend bracket boxes from shaft wall to car guide rail outer edges
+            rail_protrusion = config.GUIDE_RAIL_BOX_WIDTH + config.GUIDE_RAIL_STEM_LENGTH + config.GUIDE_RAIL_BAR_THICKNESS
+            left_box_width = car_x - rail_protrusion - shaft_x
+            right_box_width = (shaft_x + shaft_width) - (car_x + uc_width + rail_protrusion)
             draw_car_brackets_mra(
                 ax,
                 shaft_x=shaft_x,
@@ -1073,6 +1086,8 @@ class LiftShaftSketch:
                 car_bracket_width=left_cb,
                 car_y=car_y,
                 car_depth=uc_depth,
+                left_box_width=left_box_width,
+                right_box_width=right_box_width,
             )
 
         # Draw lift car - centered horizontally
@@ -2353,16 +2368,26 @@ class LiftShaftSketch:
                 cw_bracket_x = shaft_x + cb_width + uc_width
                 draw_counterweight_bracket(ax, cw_bracket_x, bracket_y, cwb_width, bracket_height, align="right")
 
+            # Compute car guide rail outer edges for dynamic bracket widths
+            rail_protrusion = config.GUIDE_RAIL_BOX_WIDTH + config.GUIDE_RAIL_STEM_LENGTH + config.GUIDE_RAIL_BAR_THICKNESS
+            car_left_rail = car_center_x - uc_width / 2 - rail_protrusion
+            car_right_rail = car_center_x + uc_width / 2 + rail_protrusion
+
             # Draw car bracket box (against shaft wall)
+            # Dynamic width: extends from shaft wall to car guide rail outer edge
             car_bracket_box_y = shaft_interior_y + (sd - config.CAR_BRACKET_BOX_HEIGHT) / 2
             if not mirror:
-                car_bracket_box_x = shaft_x + sw - config.CAR_BRACKET_BOX_WIDTH
+                # Normal: car bracket on right side - from right rail outer edge to right shaft wall
+                car_bracket_box_x = car_right_rail
+                car_bracket_box_w = shaft_x + sw - car_right_rail
             else:
+                # Mirrored: car bracket on left side - from left shaft wall to left rail outer edge
                 car_bracket_box_x = shaft_x
+                car_bracket_box_w = car_left_rail - shaft_x
 
             ax.add_patch(Rectangle(
                 (car_bracket_box_x, car_bracket_box_y),
-                config.CAR_BRACKET_BOX_WIDTH,
+                car_bracket_box_w,
                 config.CAR_BRACKET_BOX_HEIGHT,
                 facecolor=config.CAR_BRACKET_BOX_COLOR,
                 edgecolor="#000000",
@@ -2371,14 +2396,19 @@ class LiftShaftSketch:
             ))
 
             # Draw CW-side car bracket
+            # Dynamic width: extends from CW box inner edge to car rail edge
             cw_side_bracket_y = shaft_interior_y + (sd - config.MRL_CW_SIDE_CAR_BRACKET_HEIGHT) / 2
             if not mirror:
+                # Normal: CW box right edge to car left rail
                 cw_side_bracket_x = shaft_x + (config.CW_BOX_WIDTH - config.CW_FRAME_THICKNESS)
+                cw_side_bracket_w = car_left_rail - cw_side_bracket_x
             else:
-                cw_box_left_edge = shaft_x + cb_width + uc_width + cwb_width - (config.CW_BOX_WIDTH - config.CW_FRAME_THICKNESS)
-                cw_side_bracket_x = cw_box_left_edge - config.MRL_CW_SIDE_CAR_BRACKET_WIDTH
+                # Mirrored: CW is on right, bracket from car right rail to CW box left edge
+                cw_box_left_edge = shaft_x + sw - (config.CW_BOX_WIDTH - config.CW_FRAME_THICKNESS)
+                cw_side_bracket_x = car_right_rail
+                cw_side_bracket_w = cw_box_left_edge - car_right_rail
 
-            draw_car_bracket_cw_side(ax, cw_side_bracket_x, cw_side_bracket_y)
+            draw_car_bracket_cw_side(ax, cw_side_bracket_x, cw_side_bracket_y, width=cw_side_bracket_w)
 
         # Draw lift car (center in available space between brackets)
         if display_options["show_car_interior"]:
@@ -2485,6 +2515,10 @@ class LiftShaftSketch:
             )
 
             # Car brackets on both sides
+            # Dynamic widths: extend bracket boxes from shaft wall to car guide rail outer edges
+            rail_protrusion = config.GUIDE_RAIL_BOX_WIDTH + config.GUIDE_RAIL_STEM_LENGTH + config.GUIDE_RAIL_BAR_THICKNESS
+            left_box_width = car_x - rail_protrusion - shaft_x
+            right_box_width = (shaft_x + shaft_width) - (car_x + uc_width + rail_protrusion)
             draw_car_brackets_mra(
                 ax,
                 shaft_x=shaft_x,
@@ -2494,6 +2528,8 @@ class LiftShaftSketch:
                 car_bracket_width=left_cb,
                 car_y=car_y,
                 car_depth=uc_depth,
+                left_box_width=left_box_width,
+                right_box_width=right_box_width,
             )
 
         # Draw lift car

@@ -1591,6 +1591,8 @@ def draw_car_brackets_mra(
     car_bracket_width: float,
     car_y: float = None,
     car_depth: float = None,
+    left_box_width: float = None,
+    right_box_width: float = None,
 ) -> None:
     """
     Draw car brackets on BOTH left and right sides (for MRA configuration).
@@ -1607,9 +1609,12 @@ def draw_car_brackets_mra(
         car_bracket_width: Width of each car bracket
         car_y: Bottom y coordinate of car (if None, centers in shaft)
         car_depth: Depth of car (if None, centers in shaft)
+        left_box_width: Dynamic width for left bracket box (None = use config default)
+        right_box_width: Dynamic width for right bracket box (None = use config default)
     """
     # Use MRA car bracket box dimensions
-    box_width = config.MRA_CAR_BRACKET_BOX_WIDTH   # 200mm
+    left_w = left_box_width if left_box_width is not None else config.MRA_CAR_BRACKET_BOX_WIDTH
+    right_w = right_box_width if right_box_width is not None else config.MRA_CAR_BRACKET_BOX_WIDTH
     box_height = config.MRA_CAR_BRACKET_BOX_HEIGHT  # 400mm
 
     # Position brackets at vertical center of car (where guard rails are)
@@ -1624,7 +1629,7 @@ def draw_car_brackets_mra(
     left_box_x = shaft_x
     ax.add_patch(Rectangle(
         (left_box_x, box_y),
-        box_width,
+        left_w,
         box_height,
         facecolor=config.CAR_BRACKET_BOX_COLOR,
         edgecolor="#000000",
@@ -1633,10 +1638,10 @@ def draw_car_brackets_mra(
     ))
 
     # Right car bracket box - right edge touches shaft right edge
-    right_box_x = shaft_x + shaft_width - box_width
+    right_box_x = shaft_x + shaft_width - right_w
     ax.add_patch(Rectangle(
         (right_box_x, box_y),
-        box_width,
+        right_w,
         box_height,
         facecolor=config.CAR_BRACKET_BOX_COLOR,
         edgecolor="#000000",
