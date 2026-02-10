@@ -140,7 +140,10 @@ def render_lift_config_form(
         # Reset shaft dims when machine type or lift type changes
         _stale_bracket_keys = ["_cw_bracket", "_car_bracket", "_avail_w",
                                "_mra_cw_bracket", "_mra_cw_gap", "_avail_d",
-                               "_mra_left_bracket", "_mra_right_bracket", "_avail_mra_w"]
+                               "_mra_left_bracket", "_mra_right_bracket", "_avail_mra_w",
+                               "_door_width", "_door_panel_length",
+                               "_door_opening_type", "_telescopic_left_ext",
+                               "_telescopic_right_ext", "_prev_door_width"]
 
         mt_key = f"{key_prefix}_prev_machine_type"
         if mt_key in st.session_state and st.session_state[mt_key] != machine_type:
@@ -160,19 +163,39 @@ def render_lift_config_form(
 
         col_sw, col_sd = st.columns(2)
         with col_sw:
+            # Clamp shaft width value to valid range
+            sw_value = int(initial_values.get("shaft_width_override", 0) or _default_sw)
+            sw_value = max(500, min(sw_value, 6000))
+
+            # Fix session state if invalid
+            sw_key = f"{key_prefix}_shaft_width"
+            if sw_key in st.session_state:
+                if st.session_state[sw_key] < 500 or st.session_state[sw_key] > 6000:
+                    st.session_state[sw_key] = sw_value
+
             shaft_width_input = st.number_input(
                 "Shaft Width (mm)",
                 min_value=500, max_value=6000,
-                value=int(initial_values.get("shaft_width_override", 0) or _default_sw),
-                step=10, key=f"{key_prefix}_shaft_width",
+                value=sw_value,
+                step=10, key=sw_key,
                 help="Internal shaft width. Leave at default or increase for extra space."
             )
         with col_sd:
+            # Clamp shaft depth value to valid range
+            sd_value = int(initial_values.get("shaft_depth_override", 0) or _default_sd)
+            sd_value = max(500, min(sd_value, 6000))
+
+            # Fix session state if invalid
+            sd_key = f"{key_prefix}_shaft_depth"
+            if sd_key in st.session_state:
+                if st.session_state[sd_key] < 500 or st.session_state[sd_key] > 6000:
+                    st.session_state[sd_key] = sd_value
+
             shaft_depth_input = st.number_input(
                 "Shaft Depth (mm)",
                 min_value=500, max_value=6000,
-                value=int(initial_values.get("shaft_depth_override", 0) or _default_sd),
-                step=10, key=f"{key_prefix}_shaft_depth",
+                value=sd_value,
+                step=10, key=sd_key,
                 help="Internal shaft depth. Leave at default or increase for extra space."
             )
 
@@ -394,132 +417,202 @@ def render_lift_config_form(
         shaft_width = max(shaft_width_input, min_shaft_width)
 
         # Door Settings (after brackets so we can validate against shaft width)
-        with st.expander("Door Settings", expanded=False):
-            # Telescopic door variables (set defaults for non-fire lifts)
-            door_opening_type = "centre"
-            telescopic_left_ext = None
-            telescopic_right_ext = None
+        st.divider()
+        st.markdown("**Door Settings**")
 
+        # Telescopic door variables (set defaults for non-fire lifts)
+        door_opening_type = "centre"
+        telescopic_left_ext = None
+        telescopic_right_ext = None
+
+        col_dw, col_dh = st.columns(2)
+        with col_dw:
             if lift_type == "fire":
-                st.info(f"Fire/Service lift door width is fixed at {config.FIRE_LIFT_DOOR_WIDTH}mm")
-                door_width = config.FIRE_LIFT_DOOR_WIDTH
-                door_height = st.number_input(
-                    "Door Opening Height (mm)",
-                    min_value=1500, max_value=3500,
-                    value=int(initial_values.get("door_height", config.DEFAULT_DOOR_HEIGHT)),
-                    step=50, key=f"{key_prefix}_door_height",
-                    help="Height of the door opening"
+                # Ensure fire lift door width is at least the minimum
+                fire_door_default = max(
+                    int(initial_values.get("door_width", config.FIRE_LIFT_DOOR_WIDTH)),
+                    int(config.FIRE_LIFT_DOOR_WIDTH)
                 )
-
-                # Door Opening Type selector (fire lifts only)
-                opening_type_options = ["Centre Opening", "Telescopic Opening"]
-                opening_type_idx = 0
-                stored_type = st.session_state.get(f"{key_prefix}_door_opening_type")
-                if stored_type == "Telescopic Opening" or initial_values.get("door_opening_type") == "telescopic":
-                    opening_type_idx = 1
-                door_opening_type_label = st.selectbox(
-                    "Door Opening Type",
-                    options=opening_type_options,
-                    index=opening_type_idx,
-                    key=f"{key_prefix}_door_opening_type",
-                    help="Centre Opening: symmetric panels. Telescopic: asymmetric shorter panel."
+                door_width = st.number_input(
+                    "Door Width (mm)",
+                    min_value=int(config.FIRE_LIFT_DOOR_WIDTH),
+                    max_value=2000,
+                    value=fire_door_default,
+                    step=50, key=f"{key_prefix}_door_width",
+                    help=f"Minimum {config.FIRE_LIFT_DOOR_WIDTH}mm for fire/service lifts"
                 )
-                door_opening_type = "telescopic" if door_opening_type_label == "Telescopic Opening" else "centre"
-
             else:
-                col_dw, col_dh = st.columns(2)
-                with col_dw:
-                    door_width = st.number_input(
-                        "Door Width (mm)",
-                        min_value=700, max_value=2000,
-                        value=int(initial_values.get("door_width", config.DEFAULT_DOOR_WIDTH)),
-                        step=50, key=f"{key_prefix}_door_width",
-                        help="Width of the door opening"
-                    )
-                with col_dh:
-                    door_height = st.number_input(
-                        "Door Opening Height (mm)",
-                        min_value=1500, max_value=3500,
-                        value=int(initial_values.get("door_height", config.DEFAULT_DOOR_HEIGHT)),
-                        step=50, key=f"{key_prefix}_door_height",
-                        help="Height of the door opening"
-                    )
-
-            if door_opening_type == "telescopic":
-                # Telescopic extension inputs
-                default_left = int(0.5 * door_width + config.TELESCOPIC_LEFT_EXTENSION_EXTRA)
-                default_right = config.TELESCOPIC_RIGHT_EXTENSION
-                col_tl, col_tr = st.columns(2)
-                with col_tl:
-                    telescopic_left_ext = st.number_input(
-                        "Left Extension (mm)",
-                        min_value=50, max_value=2000,
-                        value=int(initial_values.get("telescopic_left_ext", default_left)),
-                        step=25, key=f"{key_prefix}_telescopic_left_ext",
-                        help="Extension beyond door width on left side"
-                    )
-                with col_tr:
-                    telescopic_right_ext = st.number_input(
-                        "Right Extension (mm)",
-                        min_value=50, max_value=1000,
-                        value=int(initial_values.get("telescopic_right_ext", default_right)),
-                        step=25, key=f"{key_prefix}_telescopic_right_ext",
-                        help="Extension beyond door width on right side"
-                    )
-                total_panel = telescopic_left_ext + door_width + telescopic_right_ext
-                st.caption(f"Total panel length: {int(total_panel)}mm")
-                # For telescopic, door_extension is not used for drawing
-                door_extension = 0
-                door_panel_length = int(total_panel)
-            else:
-                # Calculate panel length constraints with proper validation
-                min_panel_length = 2 * door_width  # At minimum, must fit the doors
-                default_panel_length = min(2 * door_width + 2 * config.DEFAULT_DOOR_EXTENSION, shaft_width)
-                max_panel_length = int(shaft_width)  # Cannot exceed shaft inner width
-
-                door_panel_length = st.number_input(
-                    "Door Panel Length (mm)",
-                    min_value=int(min_panel_length),
-                    max_value=max_panel_length,
-                    value=int(min(initial_values.get("door_panel_length", default_panel_length), max_panel_length)),
-                    step=50,
-                    key=f"{key_prefix}_door_panel_length",
-                    help=f"Total width of door panel rectangle. Max: {max_panel_length}mm (shaft width)"
+                door_width = st.number_input(
+                    "Door Width (mm)",
+                    min_value=700, max_value=2000,
+                    value=int(initial_values.get("door_width", config.DEFAULT_DOOR_WIDTH)),
+                    step=50, key=f"{key_prefix}_door_width",
+                    help="Width of the door opening"
                 )
+        with col_dh:
+            door_height = st.number_input(
+                "Door Opening Height (mm)",
+                min_value=1500, max_value=3500,
+                value=int(initial_values.get("door_height", config.DEFAULT_DOOR_HEIGHT)),
+                step=50, key=f"{key_prefix}_door_height",
+                help="Height of the door opening"
+            )
 
-            col_sow, col_soh = st.columns(2)
-            with col_sow:
-                structural_opening_width = st.number_input(
-                    "Structural Opening Width (mm)",
-                    min_value=800,
-                    max_value=3000,
-                    value=int(initial_values.get("structural_opening_width", config.DEFAULT_STRUCTURAL_OPENING_WIDTH)),
-                    step=50,
-                    key=f"{key_prefix}_structural_opening_width",
-                    help="Width of structural opening in front wall"
+        if lift_type == "fire":
+            # Door Opening Type selector (fire lifts only)
+            opening_type_options = ["Centre Opening", "Telescopic Opening"]
+            opening_type_idx = 0
+            stored_type = st.session_state.get(f"{key_prefix}_door_opening_type")
+            if stored_type == "Telescopic Opening" or initial_values.get("door_opening_type") == "telescopic":
+                opening_type_idx = 1
+            door_opening_type_label = st.selectbox(
+                "Door Opening Type",
+                options=opening_type_options,
+                index=opening_type_idx,
+                key=f"{key_prefix}_door_opening_type",
+                help="Centre Opening: symmetric panels. Telescopic: asymmetric shorter panel."
+            )
+            door_opening_type = "telescopic" if door_opening_type_label == "Telescopic Opening" else "centre"
+
+        if door_opening_type == "telescopic":
+            # Telescopic extension inputs
+            default_left = int(0.5 * door_width + config.TELESCOPIC_LEFT_EXTENSION_EXTRA)
+            default_right = config.TELESCOPIC_RIGHT_EXTENSION
+            col_tl, col_tr = st.columns(2)
+            with col_tl:
+                # Clamp value to valid range
+                left_ext_value = max(50, min(int(initial_values.get("telescopic_left_ext", default_left)), 2000))
+
+                # Auto-update left extension if it was at the previous default
+                left_key = f"{key_prefix}_telescopic_left_ext"
+                prev_dw_key = f"{key_prefix}_prev_door_width"
+                if left_key in st.session_state:
+                    prev_dw = st.session_state.get(prev_dw_key, door_width)
+                    old_default = int(0.5 * prev_dw + config.TELESCOPIC_LEFT_EXTENSION_EXTRA)
+                    if st.session_state[left_key] == old_default and old_default != default_left:
+                        st.session_state[left_key] = default_left
+                    elif st.session_state[left_key] < 50 or st.session_state[left_key] > 2000:
+                        st.session_state[left_key] = left_ext_value
+                st.session_state[prev_dw_key] = door_width
+
+                telescopic_left_ext = st.number_input(
+                    "Left Extension (mm)",
+                    min_value=50, max_value=2000,
+                    value=left_ext_value,
+                    step=25, key=left_key,
+                    help="Extension beyond door width on left side"
                 )
-            with col_soh:
-                structural_opening_height = st.number_input(
-                    "Structural Opening Height (mm)",
-                    min_value=1500,
-                    max_value=4000,
-                    value=int(initial_values.get("structural_opening_height", config.DEFAULT_STRUCTURAL_OPENING_HEIGHT)),
-                    step=50,
-                    key=f"{key_prefix}_structural_opening_height",
-                    help="Height of structural opening in front wall"
+            with col_tr:
+                # Clamp value to valid range
+                right_ext_value = max(50, min(int(initial_values.get("telescopic_right_ext", default_right)), 1000))
+
+                # Fix session state if invalid
+                right_key = f"{key_prefix}_telescopic_right_ext"
+                if right_key in st.session_state:
+                    if st.session_state[right_key] < 50 or st.session_state[right_key] > 1000:
+                        st.session_state[right_key] = right_ext_value
+
+                telescopic_right_ext = st.number_input(
+                    "Right Extension (mm)",
+                    min_value=50, max_value=1000,
+                    value=right_ext_value,
+                    step=25, key=right_key,
+                    help="Extension beyond door width on right side"
                 )
+            total_panel = telescopic_left_ext + door_width + telescopic_right_ext
+            st.caption(f"Total panel length: {int(total_panel)}mm")
+            # For telescopic, door_extension is not used for drawing
+            door_extension = 0
+            door_panel_length = int(total_panel)
+
+            # Door panel thickness (for telescopic)
+            # Clamp value to valid range
+            thickness_value = max(50, min(int(initial_values.get("door_panel_thickness", config.DEFAULT_LIFT_DOOR_THICKNESS)), 300))
+
+            # Fix session state if invalid
+            thickness_key = f"{key_prefix}_door_panel_thickness"
+            if thickness_key in st.session_state:
+                if st.session_state[thickness_key] < 50 or st.session_state[thickness_key] > 300:
+                    st.session_state[thickness_key] = thickness_value
 
             door_panel_thickness = st.number_input(
                 "Door Panel Thickness (mm)",
                 min_value=50,
                 max_value=300,
-                value=int(initial_values.get("door_panel_thickness", config.DEFAULT_LIFT_DOOR_THICKNESS)),
+                value=thickness_value,
                 step=10,
-                key=f"{key_prefix}_door_panel_thickness",
+                key=thickness_key,
                 help="Depth of each door panel. Affects shaft depth calculation."
             )
+        else:
+            # Default panel length = 2×door_width + 2×extension, capped at shaft width
+            default_panel_length = min(2 * door_width + 2 * config.DEFAULT_DOOR_EXTENSION, shaft_width)
 
-            # Calculate extension from panel length
+            # Auto-adjust panel length when door_width changes (panel contains 2× door)
+            panel_key = f"{key_prefix}_door_panel_length"
+            prev_dw_key = f"{key_prefix}_prev_door_width"
+            if panel_key in st.session_state:
+                prev_dw = st.session_state.get(prev_dw_key, door_width)
+                if prev_dw != door_width:
+                    delta = int(2 * (door_width - prev_dw))
+                    st.session_state[panel_key] = st.session_state[panel_key] + delta
+            st.session_state[prev_dw_key] = door_width
+
+            col_dpl, col_dpt = st.columns(2)
+            with col_dpl:
+                door_panel_length = st.number_input(
+                    "Door Panel Length (mm)",
+                    min_value=500,
+                    max_value=6000,
+                    value=int(initial_values.get("door_panel_length", default_panel_length)),
+                    step=50,
+                    key=f"{key_prefix}_door_panel_length",
+                    help="Total door panel length. Auto-calculated from door width + extensions."
+                )
+            with col_dpt:
+                # Clamp value to valid range
+                thickness_value = max(50, min(int(initial_values.get("door_panel_thickness", config.DEFAULT_LIFT_DOOR_THICKNESS)), 300))
+
+                # Fix session state if invalid
+                thickness_key = f"{key_prefix}_door_panel_thickness"
+                if thickness_key in st.session_state:
+                    if st.session_state[thickness_key] < 50 or st.session_state[thickness_key] > 300:
+                        st.session_state[thickness_key] = thickness_value
+
+                door_panel_thickness = st.number_input(
+                    "Door Panel Thickness (mm)",
+                    min_value=50,
+                    max_value=300,
+                    value=thickness_value,
+                    step=10,
+                    key=thickness_key,
+                    help="Depth of each door panel. Affects shaft depth calculation."
+                )
+
+        col_sow, col_soh = st.columns(2)
+        with col_sow:
+            structural_opening_width = st.number_input(
+                "Structural Opening Width (mm)",
+                min_value=800,
+                max_value=3000,
+                value=int(initial_values.get("structural_opening_width", config.DEFAULT_STRUCTURAL_OPENING_WIDTH)),
+                step=50,
+                key=f"{key_prefix}_structural_opening_width",
+                help="Width of structural opening in front wall"
+            )
+        with col_soh:
+            structural_opening_height = st.number_input(
+                "Structural Opening Height (mm)",
+                min_value=1500,
+                max_value=4000,
+                value=int(initial_values.get("structural_opening_height", config.DEFAULT_STRUCTURAL_OPENING_HEIGHT)),
+                step=50,
+                key=f"{key_prefix}_structural_opening_height",
+                help="Height of structural opening in front wall"
+            )
+
+        # Calculate extension from panel length (centre opening only)
+        if door_opening_type != "telescopic":
             door_extension = (door_panel_length - 2 * door_width) / 2
 
         # --- MRA Depth bracket inputs (after door settings, needs door_panel_thickness) ---
@@ -602,8 +695,10 @@ def render_lift_config_form(
             "finished_car_width": car_width,
             "finished_car_depth": car_depth,
             "lift_machine_type": machine_type,
+            "door_width": door_width,
             "door_panel_thickness": door_panel_thickness,
             "door_opening_type": door_opening_type,
+            "structural_opening_width": structural_opening_width,
         }
         if machine_type == "mrl":
             temp_kwargs["counterweight_bracket_width"] = cw_bracket
@@ -632,13 +727,18 @@ def render_lift_config_form(
                                       else config.FIRE_LIFT_MIN_SHAFT_WIDTH)
                 if shaft_width_input < _fire_min_sw_check:
                     errors.append(f"Fire/Service lift shaft width ({shaft_width_input}mm) below minimum ({int(_fire_min_sw_check)}mm)")
+            actual_sw = max(shaft_width_input, min_sw)
+            if door_width > structural_opening_width:
+                errors.append(f"Door Width ({door_width}mm) exceeds Structural Opening Width ({structural_opening_width}mm)")
+            if door_opening_type == "centre":
+                if door_panel_length > actual_sw:
+                    errors.append(f"Door Panel Length ({door_panel_length}mm) exceeds shaft width ({int(actual_sw)}mm)")
 
             if errors:
                 st.error(" | ".join(errors))
                 has_errors = True
             else:
                 # Component breakdown info box
-                actual_sw = max(shaft_width_input, min_sw)
                 actual_sd = max(shaft_depth_input, min_sd)
                 if machine_type == "mrl":
                     rear_cl = actual_sd - (2 * door_panel_thickness + config.DEFAULT_DOOR_GAP + unfinished_car_depth)
@@ -659,11 +759,11 @@ def render_lift_config_form(
                     )
                 st.info(info_str)
 
-        except ValueError:
+        except ValueError as e:
             shaft_width_override = None
             shaft_depth_override = None
             has_errors = True
-            st.error("Invalid dimension combination")
+            st.error(str(e))
 
     return {
         "type": lift_type,

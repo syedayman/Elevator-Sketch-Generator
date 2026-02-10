@@ -224,8 +224,12 @@ class LiftConfig:
                     f"Fire lift must use one of these cabin sizes (WxD): {valid}. "
                     f"Got: {size[0]}x{size[1]}"
                 )
-            # Set fire lift door width
-            self.door_width = config.FIRE_LIFT_DOOR_WIDTH
+            # Validate fire lift door width minimum
+            if self.door_width < config.FIRE_LIFT_DOOR_WIDTH:
+                errors.append(
+                    f"Fire lift door width ({int(self.door_width)}mm) below minimum "
+                    f"({int(config.FIRE_LIFT_DOOR_WIDTH)}mm)."
+                )
 
         # Validate door_opening_type
         if self.door_opening_type not in ("centre", "telescopic"):
@@ -319,8 +323,7 @@ class LiftConfig:
             )
 
         if errors:
-            error_list = "\n  - ".join(errors)
-            raise ValueError(f"LiftConfig validation failed:\n  - {error_list}")
+            raise ValueError(" | ".join(errors))
 
 
 def validate_fire_lift_positions(lifts: List[LiftConfig]) -> None:
@@ -790,11 +793,8 @@ class LiftShaftSketch:
                 available = sw - cwb_width - cb_width
                 car_center_x = wt + cwb_width + (available - uc_width) / 2 + uc_width / 2
 
-            # For fire lifts, center door/opening on shaft (not car) to avoid wall overlap
-            if lift.lift_type == "fire":
-                door_center_x = wt + sw / 2  # Shaft center
-            else:
-                door_center_x = car_center_x  # Car center
+            # Center door on car for all lift types
+            door_center_x = car_center_x
 
             opening_x = door_center_x - sow / 2
         else:
@@ -887,18 +887,15 @@ class LiftShaftSketch:
             car_x_offset = cb_width + (available - uc_width) / 2
             car_center_x = shaft_x + car_x_offset + uc_width / 2
 
-        # For fire lifts, center doors on shaft (not car) to avoid wall overlap
-        if lift_config.lift_type == "fire":
-            door_center_x = shaft_x + lift_config.shaft_width / 2  # Shaft center
-        else:
-            door_center_x = car_center_x  # Car center
+        # Center door on car for all lift types
+        door_center_x = car_center_x
 
         # Draw lift doors first (if enabled)
         door_info = None
         if display_options.get("show_lift_doors", False):
             door_info = draw_lift_doors(
                 ax,
-                center_x=door_center_x,  # Shaft center for fire lifts, car center for others
+                center_x=door_center_x,  # Car center for all lift types
                 wall_inner_y=shaft_y,  # At y = wall_thickness (inner edge of front wall)
                 door_width=lift_config.door_width,
                 door_extension=lift_config.door_extension,
@@ -975,6 +972,9 @@ class LiftShaftSketch:
                 uc_depth,
                 fc_width,
                 fc_depth,
+                door_width=lift_config.door_width,
+                lift_type=lift_config.lift_type,
+                door_opening_type=lift_config.door_opening_type,
             )
 
             # Draw car interior details
@@ -1086,6 +1086,9 @@ class LiftShaftSketch:
                 uc_depth,
                 fc_width,
                 fc_depth,
+                door_width=lift_config.door_width,
+                lift_type=lift_config.lift_type,
+                door_opening_type=lift_config.door_opening_type,
             )
 
             # Draw car interior details
@@ -1173,11 +1176,8 @@ class LiftShaftSketch:
                 available = sw - cwb_width - cb_width
                 car_center_x = wt + cwb_width + (available - uc_width) / 2 + uc_width / 2
 
-            # For fire lifts, door is centered on shaft (not car)
-            if lift.lift_type == "fire":
-                door_center_x = wt + sw / 2  # Shaft center
-            else:
-                door_center_x = car_center_x
+            # Center door on car for all lift types
+            door_center_x = car_center_x
         else:
             car_center_x = wt + sw / 2  # Shaft center as fallback
             door_center_x = car_center_x
@@ -1477,11 +1477,8 @@ class LiftShaftSketch:
                         available = sw - cb_width - cwb_width
                         car_center_x = shaft_left + cb_width + (available - uc_width) / 2 + uc_width / 2
 
-                # For fire lifts, center door/opening on shaft (not car) to avoid wall overlap
-                if lift_config.lift_type == "fire":
-                    door_center_x = shaft_left + sw / 2  # Shaft center
-                else:
-                    door_center_x = car_center_x  # Car center
+                # Center door on car for all lift types
+                door_center_x = car_center_x
 
                 opening_x = door_center_x - sow / 2
             else:
@@ -1611,11 +1608,8 @@ class LiftShaftSketch:
                         available = sw - cb_width - cwb_width
                         car_center_x = shaft_left + cb_width + (available - uc_width) / 2 + uc_width / 2
 
-                # For fire lifts, center door/opening on shaft (not car)
-                if lift.lift_type == "fire":
-                    door_center_x = shaft_left + sw / 2  # Shaft center
-                else:
-                    door_center_x = car_center_x  # Car center
+                # Center door on car for all lift types
+                door_center_x = car_center_x
             else:
                 car_center_x = shaft_left + sw / 2  # Shaft center as fallback
                 door_center_x = car_center_x
@@ -2175,11 +2169,8 @@ class LiftShaftSketch:
                     available = sw - cb_width - cwb_width
                     car_center_x = shaft_left + cb_width + (available - uc_width) / 2 + uc_width / 2
 
-            # For fire lifts, center door/opening on shaft (not car) to avoid wall overlap
-            if lift_config.lift_type == "fire":
-                door_center_x = shaft_left + sw / 2  # Shaft center
-            else:
-                door_center_x = car_center_x  # Car center
+            # Center door on car for all lift types
+            door_center_x = car_center_x
 
             opening_x = door_center_x - sow / 2
 
@@ -2326,11 +2317,8 @@ class LiftShaftSketch:
             available = sw - cb_width - cwb_width
             car_center_x = shaft_x + cb_width + (available - uc_width) / 2 + uc_width / 2
 
-        # For fire lifts, center doors on shaft (not car) to avoid wall overlap
-        if lift_config.lift_type == "fire":
-            door_center_x = shaft_x + lift_config.shaft_width / 2  # Shaft center
-        else:
-            door_center_x = car_center_x  # Car center
+        # Center door on car for all lift types
+        door_center_x = car_center_x
 
         # In mirrored orientation, doors are at top (high Y), back is at bottom (low Y)
         # Car Y position: front-fixed (mirrored: door at top, so car top touches door zone)
@@ -2343,7 +2331,7 @@ class LiftShaftSketch:
             # Doors are at top of shaft (shaft_interior_y + sd is where front wall is)
             door_info = draw_lift_doors(
                 ax,
-                center_x=door_center_x,  # Shaft center for fire lifts, car center for others
+                center_x=door_center_x,  # Car center for all lift types
                 wall_inner_y=shaft_interior_y + sd,  # Top of shaft interior
                 door_width=lift_config.door_width,
                 door_extension=lift_config.door_extension,
@@ -2410,6 +2398,9 @@ class LiftShaftSketch:
                 fc_width,
                 fc_depth,
                 mirrored=True,  # Doors at top for Bank 2
+                door_width=lift_config.door_width,
+                lift_type=lift_config.lift_type,
+                door_opening_type=lift_config.door_opening_type,
             )
 
             # Draw car interior details
@@ -2516,6 +2507,9 @@ class LiftShaftSketch:
                 fc_width,
                 fc_depth,
                 mirrored=True,  # Doors at top for Bank 2
+                door_width=lift_config.door_width,
+                lift_type=lift_config.lift_type,
+                door_opening_type=lift_config.door_opening_type,
             )
 
             finished_car_x = car_x + (uc_width - fc_width) / 2
@@ -2667,11 +2661,8 @@ class LiftShaftSketch:
             car_top_y = car_y + lift.unfinished_car_depth
             finished_car_top_y = finished_car_y + lift.finished_car_depth
 
-            # For fire lifts, center door/opening on shaft (not car) to avoid wall overlap
-            if lift.lift_type == "fire":
-                door_center_x = shaft_left + sw / 2  # Shaft center
-            else:
-                door_center_x = car_center_x  # Car center
+            # Center door on car for all lift types
+            door_center_x = car_center_x
 
             # --- Horizontal dimensions (above or below based on door orientation) ---
 
