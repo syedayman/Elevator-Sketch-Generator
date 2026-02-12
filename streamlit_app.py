@@ -26,6 +26,7 @@ def get_default_lift_config(lift_type: str = "passenger") -> dict:
             "door_panel_thickness": config.DEFAULT_LIFT_DOOR_THICKNESS,
             "door_extension": config.DEFAULT_DOOR_EXTENSION,
             "door_opening_type": "centre",
+            "double_entrance": False,
         }
     return {
         "type": "passenger",
@@ -36,6 +37,7 @@ def get_default_lift_config(lift_type: str = "passenger") -> dict:
         "door_panel_thickness": config.DEFAULT_LIFT_DOOR_THICKNESS,
         "door_extension": config.DEFAULT_DOOR_EXTENSION,
         "door_opening_type": "centre",
+        "double_entrance": False,
     }
 
 
@@ -84,7 +86,8 @@ def render_lift_config_form(
                             "_mra_left_bracket", "_mra_right_bracket",
                             "_mra_cw_bracket", "_mra_cw_gap",
                             "_shaft_width", "_shaft_depth",
-                            "_door_opening_type", "_telescopic_left_ext", "_telescopic_right_ext"]
+                            "_door_opening_type", "_telescopic_left_ext", "_telescopic_right_ext",
+                            "_double_entrance"]
             for k in keys_to_copy:
                 src_key = f"{lift1_prefix}{k}"
                 dst_key = f"{key_prefix}{k}"
@@ -103,21 +106,47 @@ def render_lift_config_form(
             help="Fire/Service lift only allowed at position 1 (first lift)",
         )
 
+        double_entrance = False
+        if lift_type == "fire":
+            double_entrance = st.checkbox(
+                "Double Car Entrance",
+                value=bool(initial_values.get("double_entrance", False)),
+                key=f"{key_prefix}_double_entrance",
+                help="Mirror front entrance at rear wall with fixed shaft depth.",
+            )
+
+        layout_machine_type = "mrl" if double_entrance else machine_type
+
         # --- Shaft Dimensions (first, before car/brackets) ---
         st.divider()
         st.markdown("**Shaft Dimensions**")
 
         # Compute lift-type and machine-type aware defaults
         if lift_type == "fire":
-            _fire_defaults = get_default_lift_config("fire")
-            _def_car_w = _fire_defaults["width"]
-            _def_car_d = _fire_defaults["depth"]
+            cabin_key = f"{key_prefix}_cabin_size"
+            _default_size = f"{initial_values.get('width', 1400)} x {initial_values.get('depth', 2400)} mm"
+            if _default_size not in FIRE_CABIN_OPTIONS:
+                _default_size = next(iter(FIRE_CABIN_OPTIONS.keys()))
+            _selected_size = st.session_state.get(cabin_key, _default_size)
+            _def_car_w, _def_car_d = FIRE_CABIN_OPTIONS.get(_selected_size, (1400, 2400))
         else:
             _def_car_w = initial_values.get("width", config.DEFAULT_FINISHED_CAR_WIDTH)
             _def_car_d = initial_values.get("depth", config.DEFAULT_FINISHED_CAR_DEPTH)
+
+        # Estimate fixed depth for double entrance using current state values
+        thickness_key = f"{key_prefix}_door_panel_thickness"
+        _est_door_thickness = int(st.session_state.get(
+            thickness_key,
+            initial_values.get("door_panel_thickness", config.DEFAULT_LIFT_DOOR_THICKNESS),
+        ))
+        _est_door_thickness = max(50, min(_est_door_thickness, 300))
+        _car_depth_for_fixed = _def_car_d
+        _double_door_zone = 2 * _est_door_thickness + config.DEFAULT_DOOR_GAP
+        _fixed_double_sd = int(_car_depth_for_fixed + 2 * _double_door_zone)
+
         _def_uc_w = _def_car_w + 2 * config.DEFAULT_CAR_WALL_THICKNESS
         _def_uc_d = _def_car_d + config.DEFAULT_CAR_WALL_THICKNESS
-        if machine_type == "mra":
+        if layout_machine_type == "mra":
             _default_sw = int(_def_uc_w + 2 * config.MRA_CAR_BRACKET_WIDTH)
             _default_sd = int(2 * config.DEFAULT_LIFT_DOOR_THICKNESS + config.DEFAULT_DOOR_GAP
                               + _def_uc_d + config.MRA_CW_GAP + config.MRA_CW_BRACKET_DEPTH)
@@ -130,6 +159,10 @@ def render_lift_config_form(
         else:
             _default_sw = int(config.DEFAULT_SHAFT_WIDTH)
             _default_sd = int(config.DEFAULT_SHAFT_DEPTH)
+
+        if double_entrance:
+            _default_sd = _fixed_double_sd
+
         # Enforce fire lift minimum shaft width
         if lift_type == "fire":
             _fire_min_sw = (config.FIRE_LIFT_MIN_SHAFT_WIDTH_TELESCOPIC
@@ -161,42 +194,57 @@ def render_lift_config_form(
                 st.session_state.pop(f"{key_prefix}{k}", None)
         st.session_state[lt_key] = lift_type
 
+        de_key = f"{key_prefix}_prev_double_entrance"
+        if de_key in st.session_state and st.session_state[de_key] != double_entrance:
+            sw_key = f"{key_prefix}_shaft_width"
+            st.session_state[f"{key_prefix}_shaft_depth"] = _default_sd
+            for k in _stale_bracket_keys:
+                st.session_state.pop(f"{key_prefix}{k}", None)
+            if double_entrance:
+                prev_sw = int(st.session_state.get(sw_key, _default_sw))
+                st.session_state[sw_key] = max(prev_sw, int(_default_sw))
+        st.session_state[de_key] = double_entrance
+
         col_sw, col_sd = st.columns(2)
         with col_sw:
-            # Clamp shaft width value to valid range
-            sw_value = int(initial_values.get("shaft_width_override", 0) or _default_sw)
-            sw_value = max(500, min(sw_value, 6000))
-
-            # Fix session state if invalid
             sw_key = f"{key_prefix}_shaft_width"
-            if sw_key in st.session_state:
-                if st.session_state[sw_key] < 500 or st.session_state[sw_key] > 6000:
-                    st.session_state[sw_key] = sw_value
+            sw_default = int(initial_values.get("shaft_width_override", 0) or _default_sw)
+            sw_default = max(500, min(sw_default, 6000))
+            if sw_key not in st.session_state:
+                st.session_state[sw_key] = sw_default
+            else:
+                st.session_state[sw_key] = max(500, min(int(st.session_state[sw_key]), 6000))
+            if double_entrance:
+                st.session_state[sw_key] = max(int(_default_sw), int(st.session_state[sw_key]))
 
             shaft_width_input = st.number_input(
                 "Shaft Width (mm)",
                 min_value=500, max_value=6000,
-                value=sw_value,
                 step=10, key=sw_key,
                 help="Internal shaft width. Leave at default or increase for extra space."
             )
         with col_sd:
-            # Clamp shaft depth value to valid range
-            sd_value = int(initial_values.get("shaft_depth_override", 0) or _default_sd)
-            sd_value = max(500, min(sd_value, 6000))
-
-            # Fix session state if invalid
             sd_key = f"{key_prefix}_shaft_depth"
-            if sd_key in st.session_state:
-                if st.session_state[sd_key] < 500 or st.session_state[sd_key] > 6000:
-                    st.session_state[sd_key] = sd_value
+
+            if double_entrance:
+                sd_target = max(500, min(int(_fixed_double_sd), 6000))
+                st.session_state[sd_key] = sd_target
+            else:
+                sd_target = int(initial_values.get("shaft_depth_override", 0) or _default_sd)
+                sd_target = max(500, min(sd_target, 6000))
+                if sd_key not in st.session_state:
+                    st.session_state[sd_key] = sd_target
+                else:
+                    st.session_state[sd_key] = max(500, min(int(st.session_state[sd_key]), 6000))
 
             shaft_depth_input = st.number_input(
                 "Shaft Depth (mm)",
                 min_value=500, max_value=6000,
-                value=sd_value,
                 step=10, key=sd_key,
-                help="Internal shaft depth. Leave at default or increase for extra space."
+                disabled=double_entrance,
+                help=("Fixed for double entrance: Finished Car Depth + 2 x Door Zone"
+                      if double_entrance else
+                      "Internal shaft depth. Leave at default or increase for extra space.")
             )
 
         # Capacity input (only shown when Show Capacity Label is on)
@@ -257,7 +305,7 @@ def render_lift_config_form(
 
         unfinished_car_width = car_width + 2 * config.DEFAULT_CAR_WALL_THICKNESS
 
-        if machine_type == "mrl":
+        if layout_machine_type == "mrl":
             # MRL Width: shaft_width = CW_bracket + unfinished_car_width + car_bracket
             # Both brackets are adjustable inputs linked by zero-sum constraint.
             min_cw = int(config.DEFAULT_COUNTERWEIGHT_BRACKET_WIDTH)  # 625
@@ -615,11 +663,16 @@ def render_lift_config_form(
         if door_opening_type != "telescopic":
             door_extension = (door_panel_length - 2 * door_width) / 2
 
+        door_zone = 2 * door_panel_thickness + config.DEFAULT_DOOR_GAP
+        fixed_double_depth = int(car_depth + 2 * door_zone)
+        if double_entrance:
+            shaft_depth_input = max(500, min(fixed_double_depth, 6000))
+
         # --- MRA Depth bracket inputs (after door settings, needs door_panel_thickness) ---
         unfinished_car_depth = car_depth + config.DEFAULT_CAR_WALL_THICKNESS
         has_errors = False
 
-        if machine_type == "mrl":
+        if layout_machine_type == "mrl":
             mra_cw_bracket = None
             mra_cw_gap = None
         else:  # MRA depth brackets (shown under same Bracket Spaces section)
@@ -695,12 +748,13 @@ def render_lift_config_form(
             "finished_car_width": car_width,
             "finished_car_depth": car_depth,
             "lift_machine_type": machine_type,
+            "double_entrance": double_entrance,
             "door_width": door_width,
             "door_panel_thickness": door_panel_thickness,
             "door_opening_type": door_opening_type,
             "structural_opening_width": structural_opening_width,
         }
-        if machine_type == "mrl":
+        if layout_machine_type == "mrl":
             temp_kwargs["counterweight_bracket_width"] = cw_bracket
             temp_kwargs["car_bracket_width"] = car_bracket
         else:
@@ -714,12 +768,12 @@ def render_lift_config_form(
             min_sd = int(temp_lift.min_shaft_depth)
 
             shaft_width_override = shaft_width_input if shaft_width_input > min_sw else None
-            shaft_depth_override = shaft_depth_input if shaft_depth_input > min_sd else None
+            shaft_depth_override = None if double_entrance else (shaft_depth_input if shaft_depth_input > min_sd else None)
 
             errors = []
             if shaft_width_input < min_sw:
                 errors.append(f"Shaft Width ({shaft_width_input}mm) below minimum ({min_sw}mm)")
-            if shaft_depth_input < min_sd:
+            if not double_entrance and shaft_depth_input < min_sd:
                 errors.append(f"Shaft Depth ({shaft_depth_input}mm) below minimum ({min_sd}mm)")
             if lift_type == "fire":
                 _fire_min_sw_check = (config.FIRE_LIFT_MIN_SHAFT_WIDTH_TELESCOPIC
@@ -740,14 +794,22 @@ def render_lift_config_form(
             else:
                 # Component breakdown info box
                 actual_sd = max(shaft_depth_input, min_sd)
-                if machine_type == "mrl":
-                    rear_cl = actual_sd - (2 * door_panel_thickness + config.DEFAULT_DOOR_GAP + unfinished_car_depth)
-                    info_str = (
-                        f"**{actual_sw}mm W x {actual_sd}mm D** | "
-                        f"CW Bracket: {int(cw_bracket)}mm | "
-                        f"Car Bracket: {int(car_bracket)}mm | "
-                        f"Rear Clearance: {int(rear_cl)}mm"
-                    )
+                if layout_machine_type == "mrl":
+                    if double_entrance:
+                        info_str = (
+                            f"**{actual_sw}mm W x {actual_sd}mm D** | "
+                            f"CW Bracket: {int(cw_bracket)}mm | "
+                            f"Car Bracket: {int(car_bracket)}mm | "
+                            f"Door Zone: {int(door_zone)}mm (front/rear fixed)"
+                        )
+                    else:
+                        rear_cl = actual_sd - (2 * door_panel_thickness + config.DEFAULT_DOOR_GAP + unfinished_car_depth)
+                        info_str = (
+                            f"**{actual_sw}mm W x {actual_sd}mm D** | "
+                            f"CW Bracket: {int(cw_bracket)}mm | "
+                            f"Car Bracket: {int(car_bracket)}mm | "
+                            f"Rear Clearance: {int(rear_cl)}mm"
+                        )
                 else:
                     cw_gap_display = mra_cw_gap if mra_cw_gap is not None else int(actual_sd - (2 * door_panel_thickness + config.DEFAULT_DOOR_GAP + unfinished_car_depth + mra_cw_bracket))
                     info_str = (
@@ -778,14 +840,15 @@ def render_lift_config_form(
         "structural_opening_height": structural_opening_height,
         "cw_bracket_width": cw_bracket,
         "car_bracket_width": car_bracket,
-        "mra_car_bracket_width": mra_car_bracket_left if machine_type == "mra" else None,
-        "mra_car_bracket_width_right": mra_car_bracket_right if machine_type == "mra" else None,
+        "mra_car_bracket_width": mra_car_bracket_left if layout_machine_type == "mra" else None,
+        "mra_car_bracket_width_right": mra_car_bracket_right if layout_machine_type == "mra" else None,
         "mra_cw_bracket_depth": mra_cw_bracket,
         "shaft_width_override": shaft_width_override,
         "shaft_depth_override": shaft_depth_override,
         "door_opening_type": door_opening_type,
         "telescopic_left_ext": telescopic_left_ext,
         "telescopic_right_ext": telescopic_right_ext,
+        "double_entrance": double_entrance,
         "has_errors": has_errors,
     }
 
@@ -800,6 +863,7 @@ def build_lift_config(
         "lift_type": lift_data["type"],
         "lift_capacity": lift_data["capacity"],
         "lift_machine_type": machine_type,
+        "double_entrance": lift_data.get("double_entrance", False),
         "finished_car_width": lift_data["width"],
         "finished_car_depth": lift_data["depth"],
         "door_width": lift_data["door_width"],
@@ -811,7 +875,8 @@ def build_lift_config(
         "wall_thickness": wall_thickness,
     }
 
-    if machine_type == "mrl":
+    use_mrl_layout = machine_type == "mrl" or lift_data.get("double_entrance", False)
+    if use_mrl_layout:
         if lift_data.get("cw_bracket_width") is not None:
             kwargs["counterweight_bracket_width"] = lift_data["cw_bracket_width"]
         if lift_data.get("car_bracket_width") is not None:

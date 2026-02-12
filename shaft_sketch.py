@@ -72,6 +72,7 @@ class LiftConfig:
     lift_type: str = "passenger"  # "passenger" or "fire"
     lift_capacity: Optional[int] = None  # e.g., 1350 KG
     lift_machine_type: str = "mrl"  # "mrl" (Machine Room Less) or "mra" (Machine Room Above)
+    double_entrance: bool = False  # Fire/service only: mirror entrance at rear wall
 
     # Car dimensions (for detailed drawings)
     finished_car_width: float = field(default_factory=lambda: config.DEFAULT_FINISHED_CAR_WIDTH)
@@ -124,9 +125,14 @@ class LiftConfig:
         return self.mra_car_bracket_width
 
     @property
+    def uses_mra_layout(self) -> bool:
+        """True when plan geometry should use MRA layout rules."""
+        return self.lift_machine_type == "mra" and not self.double_entrance
+
+    @property
     def min_shaft_width(self) -> float:
         """Calculate minimum shaft width from car + brackets."""
-        if self.lift_machine_type == "mra":
+        if self.uses_mra_layout:
             width = self.mra_car_bracket_width + self.unfinished_car_width + self.mra_right_bracket_width
         else:
             width = self.counterweight_bracket_width + self.unfinished_car_width + self.car_bracket_width
@@ -140,7 +146,10 @@ class LiftConfig:
     @property
     def min_shaft_depth(self) -> float:
         """Calculate minimum shaft depth from car + doors + clearances."""
-        if self.lift_machine_type == "mra":
+        door_zone = 2 * self.door_panel_thickness + config.DEFAULT_DOOR_GAP
+        if self.double_entrance:
+            return self.finished_car_depth + 2 * door_zone
+        if self.uses_mra_layout:
             return (2 * self.door_panel_thickness + config.DEFAULT_DOOR_GAP
                     + self.unfinished_car_depth + config.MRA_CW_GAP + self.mra_cw_bracket_depth)
         else:
@@ -162,6 +171,8 @@ class LiftConfig:
     @property
     def effective_shaft_depth(self) -> float:
         """Return shaft depth (override or calculated minimum)."""
+        if self.double_entrance:
+            return self.min_shaft_depth
         if self.shaft_depth_override is not None:
             return self.shaft_depth_override
         return self.min_shaft_depth
@@ -188,7 +199,7 @@ class LiftConfig:
 
     def _width_breakdown_str(self) -> str:
         """Return a human-readable breakdown of minimum shaft width components."""
-        if self.lift_machine_type == "mra":
+        if self.uses_mra_layout:
             return (f"Left Bracket ({int(self.mra_car_bracket_width)}) + "
                     f"Unfinished Car ({int(self.unfinished_car_width)}) + "
                     f"Right Bracket ({int(self.mra_right_bracket_width)})")
@@ -199,7 +210,11 @@ class LiftConfig:
 
     def _depth_breakdown_str(self) -> str:
         """Return a human-readable breakdown of minimum shaft depth components."""
-        if self.lift_machine_type == "mra":
+        if self.double_entrance:
+            return (f"Front Door Zone (2 x Door {int(self.door_panel_thickness)} + Gap {int(config.DEFAULT_DOOR_GAP)}) + "
+                    f"Finished Car ({int(self.finished_car_depth)}) + "
+                    f"Rear Door Zone (2 x Door {int(self.door_panel_thickness)} + Gap {int(config.DEFAULT_DOOR_GAP)})")
+        if self.uses_mra_layout:
             return (f"2 x Door ({int(self.door_panel_thickness)}) + "
                     f"Gap ({int(config.DEFAULT_DOOR_GAP)}) + "
                     f"Unfinished Car ({int(self.unfinished_car_depth)}) + "
@@ -214,6 +229,12 @@ class LiftConfig:
     def __post_init__(self):
         """Validate and configure lift settings. Collects all errors and reports them together."""
         errors = []
+
+        if self.double_entrance and self.lift_type != "fire":
+            errors.append("Double entrance is only available for fire/service lifts.")
+        if self.double_entrance:
+            # Double entrance has fixed depth from geometry; ignore manual depth override.
+            self.shaft_depth_override = None
 
         # Fire lift cabin size validation
         if self.lift_type == "fire":
@@ -247,7 +268,7 @@ class LiftConfig:
                 self.telescopic_right_ext = config.TELESCOPIC_RIGHT_EXTENSION
 
         # Validate bracket dimensions meet minimums
-        if self.lift_machine_type == "mrl":
+        if not self.uses_mra_layout:
             if self.counterweight_bracket_width < config.DEFAULT_COUNTERWEIGHT_BRACKET_WIDTH:
                 errors.append(
                     f"CW Bracket Width ({int(self.counterweight_bracket_width)}mm) is below minimum "
@@ -307,7 +328,7 @@ class LiftConfig:
                     f"({int(self.min_shaft_depth)}mm). Minimum = {self._depth_breakdown_str()}"
                 )
             # MRL: check minimum rear clearance
-            if self.lift_machine_type == "mrl":
+            if not self.uses_mra_layout and not self.double_entrance:
                 actual_rear = config.DEFAULT_REAR_CLEARANCE + (self.shaft_depth_override - self.min_shaft_depth) if self.shaft_depth_override >= self.min_shaft_depth else config.DEFAULT_REAR_CLEARANCE - (self.min_shaft_depth - self.shaft_depth_override)
                 if actual_rear < config.MIN_REAR_CLEARANCE:
                     errors.append(
@@ -771,14 +792,12 @@ class LiftShaftSketch:
         draw_wall_section(ax, 0, 0, wt, self.total_depth, display_options["show_hatching"])
         # Right wall
         draw_wall_section(ax, wt + sw, 0, wt, self.total_depth, display_options["show_hatching"])
-        # Back wall
-        draw_wall_section(ax, wt, wt + sd, sw, wt, display_options["show_hatching"])
 
         # Front wall with opening
         # Calculate opening position - center on cabin if enhanced API, otherwise shaft-centered
         if self._use_enhanced_api and self.lifts:
             lift = self.lifts[0]
-            if lift.lift_machine_type == "mra":
+            if lift.uses_mra_layout:
                 # MRA: center car in available space between brackets
                 left_cb = lift.mra_car_bracket_width
                 right_cb = lift.mra_right_bracket_width
@@ -818,10 +837,26 @@ class LiftShaftSketch:
         if self._use_enhanced_api and display_options.get("show_lift_doors", False):
             draw_door_jambs(ax, opening_x, wt, sow)
 
+        # Rear wall (full wall or mirrored opening for double entrance)
+        back_wall_y = wt + sd
+        has_double_entrance = self._use_enhanced_api and self.lifts and self.lifts[0].double_entrance
+        if has_double_entrance:
+            if opening_x > wt:
+                draw_wall_section(ax, wt, back_wall_y, opening_x - wt, wt, display_options["show_hatching"])
+            if right_wall_x < wt + sw:
+                draw_wall_section(ax, right_wall_x, back_wall_y, wt + sw - right_wall_x, wt, display_options["show_hatching"])
+            draw_opening(ax, opening_x, back_wall_y, sow, wt)
+            if display_options.get("show_lift_doors", False):
+                draw_door_jambs(ax, opening_x, back_wall_y, sow, mirrored=True)
+        else:
+            draw_wall_section(ax, wt, back_wall_y, sw, wt, display_options["show_hatching"])
+
         # Draw door panels - center on shaft for fire lifts, cabin for others
         if display_options["show_door_panels"]:
             door_x = door_center_x - dw / 2
             draw_door_panels(ax, door_x, 0, dw, wt, num_panels=config.DEFAULT_DOOR_PANELS)
+            if has_double_entrance:
+                draw_door_panels(ax, door_x, back_wall_y, dw, wt, num_panels=config.DEFAULT_DOOR_PANELS)
 
         # Draw dimensions
         if display_options["show_dimensions"]:
@@ -864,7 +899,7 @@ class LiftShaftSketch:
         sd = shaft_depth if shaft_depth is not None else self.shaft_depth
 
         # Dispatch to MRA-specific drawing if machine type is MRA
-        if lift_config.lift_machine_type == "mra":
+        if lift_config.uses_mra_layout:
             self._draw_lift_interior_mra(ax, shaft_x, shaft_y, lift_config, display_options, shaft_depth=sd)
             return
 
@@ -904,6 +939,19 @@ class LiftShaftSketch:
                 telescopic_left_ext=lift_config.telescopic_left_ext,
                 telescopic_right_ext=lift_config.telescopic_right_ext,
             )
+            if lift_config.double_entrance:
+                draw_lift_doors(
+                    ax,
+                    center_x=door_center_x,
+                    wall_inner_y=shaft_y + sd,
+                    door_width=lift_config.door_width,
+                    door_extension=lift_config.door_extension,
+                    door_thickness=lift_config.door_panel_thickness,
+                    mirrored=True,
+                    door_opening_type=lift_config.door_opening_type,
+                    telescopic_left_ext=lift_config.telescopic_left_ext,
+                    telescopic_right_ext=lift_config.telescopic_right_ext,
+                )
 
         # Draw counterweight bracket only (car bracket not shown)
         if display_options["show_brackets"]:
@@ -982,6 +1030,7 @@ class LiftShaftSketch:
                 fc_width,
                 fc_depth,
                 door_width=lift_config.door_width,
+                double_entrance=lift_config.double_entrance,
                 lift_type=lift_config.lift_type,
                 door_opening_type=lift_config.door_opening_type,
             )
@@ -1102,6 +1151,7 @@ class LiftShaftSketch:
                 fc_width,
                 fc_depth,
                 door_width=lift_config.door_width,
+                double_entrance=lift_config.double_entrance,
                 lift_type=lift_config.lift_type,
                 door_opening_type=lift_config.door_opening_type,
             )
@@ -1176,7 +1226,7 @@ class LiftShaftSketch:
         # Calculate door center (same logic as _draw_single_lift)
         if self._use_enhanced_api and self.lifts:
             lift = self.lifts[0]
-            if lift.lift_machine_type == "mra":
+            if lift.uses_mra_layout:
                 # MRA: center car in available space between brackets
                 left_cb = lift.mra_car_bracket_width
                 right_cb = lift.mra_right_bracket_width
@@ -1244,7 +1294,7 @@ class LiftShaftSketch:
             lift = self.lifts[0]
 
             # Calculate car positions based on machine type
-            if lift.lift_machine_type == "mra":
+            if lift.uses_mra_layout:
                 # MRA: center car in available space between brackets
                 left_cb = lift.mra_car_bracket_width
                 right_cb = lift.mra_right_bracket_width
@@ -1278,7 +1328,7 @@ class LiftShaftSketch:
             level2_target_x = shaft_right_x + 550 + wt
             level3_target_x = shaft_right_x + 850 + wt
 
-            if lift.lift_machine_type == "mra":
+            if lift.uses_mra_layout:
                 # MRA: Dynamic left bracket (shaft wall to car left edge)
                 shaft_left_wall = wt
                 left_cb = lift.mra_car_bracket_width
@@ -1472,7 +1522,7 @@ class LiftShaftSketch:
             # Calculate opening position - center on cabin if enhanced API, otherwise shaft-centered
             # Fire lifts: always center on shaft to avoid wall overlap
             if self._use_enhanced_api and lift_config:
-                if lift_config.lift_machine_type == "mra":
+                if lift_config.uses_mra_layout:
                     # MRA: center car in available space between brackets
                     left_cb = lift_config.mra_car_bracket_width
                     right_cb = lift_config.mra_right_bracket_width
@@ -1525,8 +1575,21 @@ class LiftShaftSketch:
                 door_x = door_center_x - dw / 2
                 draw_door_panels(ax, door_x, 0, dw, wt, num_panels=config.DEFAULT_DOOR_PANELS)
 
-            # Back wall for this lift at its own depth
-            draw_wall_section(ax, shaft_left, wt + sd, sw, wt, display_options["show_hatching"])
+            # Back wall for this lift at its own depth (full wall or mirrored opening for double entrance)
+            back_wall_y = wt + sd
+            has_double_entrance = lift_config is not None and lift_config.double_entrance
+            if has_double_entrance:
+                if opening_x > shaft_left:
+                    draw_wall_section(ax, shaft_left, back_wall_y, opening_x - shaft_left, wt, display_options["show_hatching"])
+                if right_wall_x < shaft_left + sw:
+                    draw_wall_section(ax, right_wall_x, back_wall_y, shaft_left + sw - right_wall_x, wt, display_options["show_hatching"])
+                draw_opening(ax, opening_x, back_wall_y, sow, wt)
+                if display_options.get("show_lift_doors", False):
+                    draw_door_jambs(ax, opening_x, back_wall_y, sow, mirrored=True)
+                if display_options["show_door_panels"]:
+                    draw_door_panels(ax, door_x, back_wall_y, dw, wt, num_panels=config.DEFAULT_DOOR_PANELS)
+            else:
+                draw_wall_section(ax, shaft_left, back_wall_y, sw, wt, display_options["show_hatching"])
 
             # L-shaped walls: Do NOT draw envelope back wall at max depth for shallower shafts
             # Each shaft's back wall is at its own depth, creating an L-shape when depths differ
@@ -1603,7 +1666,7 @@ class LiftShaftSketch:
 
             # Calculate cabin center based on mirror state (same as _draw_multi_lift)
             if self._use_enhanced_api and lift:
-                if lift.lift_machine_type == "mra":
+                if lift.uses_mra_layout:
                     # MRA: center car in available space between brackets
                     left_cb = lift.mra_car_bracket_width
                     right_cb = lift.mra_right_bracket_width
@@ -1676,7 +1739,7 @@ class LiftShaftSketch:
                 mirror = (lift_idx % 2 == 1)
 
                 # Calculate car positions based on machine type and mirror state
-                if lift.lift_machine_type == "mra":
+                if lift.uses_mra_layout:
                     # MRA: center car in available space between brackets
                     left_cb = lift.mra_car_bracket_width
                     right_cb = lift.mra_right_bracket_width
@@ -1709,7 +1772,7 @@ class LiftShaftSketch:
                 level2_target_y = shaft_top_y + 550 + wt
                 level3_target_y = shaft_top_y + 850 + wt
 
-                if lift.lift_machine_type == "mra":
+                if lift.uses_mra_layout:
                     # MRA: Dynamic left bracket (shaft wall to car left edge)
                     left_cb = lift.mra_car_bracket_width
                     right_cb = lift.mra_right_bracket_width
@@ -1806,7 +1869,7 @@ class LiftShaftSketch:
             # Calculate first lift car position for depth dimensions
             first_shaft_left = wt
             first_sw = self._shaft_widths[0]
-            if first_lift.lift_machine_type == "mra":
+            if first_lift.uses_mra_layout:
                 left_cb = first_lift.mra_car_bracket_width
                 right_cb = first_lift.mra_right_bracket_width
                 available_w = first_lift.shaft_width - left_cb - right_cb
@@ -1854,7 +1917,7 @@ class LiftShaftSketch:
                     last_mirror = (last_lift_idx % 2 == 1)
 
                     last_sw = self._shaft_widths[-1]
-                    if last_lift.lift_machine_type == "mra":
+                    if last_lift.uses_mra_layout:
                         left_cb = last_lift.mra_car_bracket_width
                         right_cb = last_lift.mra_right_bracket_width
                         available_w = last_lift.shaft_width - left_cb - right_cb
@@ -2166,7 +2229,7 @@ class LiftShaftSketch:
                 draw_shaft_interior(ax, shaft_left, base_y + wt + (max_shaft_depth - sd), sw, sd)
 
             # Calculate car center position (center car in available space between brackets)
-            if lift_config.lift_machine_type == "mra":
+            if lift_config.uses_mra_layout:
                 left_cb = lift_config.mra_car_bracket_width
                 right_cb = lift_config.mra_right_bracket_width
                 uc_width = lift_config.unfinished_car_width
@@ -2244,7 +2307,27 @@ class LiftShaftSketch:
             else:
                 # Mirrored: back wall at bottom, below shaft interior
                 back_wall_y = base_y + (max_shaft_depth - sd)
-            draw_wall_section(ax, shaft_left, back_wall_y, sw, wt, display_options["show_hatching"])
+
+            has_double_entrance = lift_config.double_entrance
+            if has_double_entrance:
+                if opening_x > shaft_left:
+                    draw_wall_section(ax, shaft_left, back_wall_y, opening_x - shaft_left, wt, display_options["show_hatching"])
+                if right_wall_x < shaft_left + sw:
+                    draw_wall_section(ax, right_wall_x, back_wall_y, shaft_left + sw - right_wall_x, wt, display_options["show_hatching"])
+                draw_opening(ax, opening_x, back_wall_y, sow, wt)
+
+                if display_options.get("show_lift_doors", False):
+                    if doors_face == "down":
+                        # Rear wall inner face is bottom edge of top wall
+                        draw_door_jambs(ax, opening_x, back_wall_y, sow, mirrored=True)
+                    else:
+                        # Rear wall inner face is top edge of bottom wall
+                        draw_door_jambs(ax, opening_x, back_wall_y + wt, sow)
+
+                if display_options["show_door_panels"]:
+                    draw_door_panels(ax, door_x, back_wall_y, dw, wt, num_panels=config.DEFAULT_DOOR_PANELS)
+            else:
+                draw_wall_section(ax, shaft_left, back_wall_y, sw, wt, display_options["show_hatching"])
 
             # L-shaped walls: Do NOT draw envelope back wall at max depth for shallower shafts
             # Each shaft's back wall is at its own depth, creating an L-shape when depths differ
@@ -2309,7 +2392,7 @@ class LiftShaftSketch:
         shaft_interior_y = shaft_y + (msd - sd)
 
         # Dispatch to MRA-specific drawing if machine type is MRA
-        if lift_config.lift_machine_type == "mra":
+        if lift_config.uses_mra_layout:
             self._draw_lift_interior_mra_mirrored(
                 ax, shaft_x, shaft_interior_y, lift_config, display_options, shaft_depth=sd
             )
@@ -2356,6 +2439,19 @@ class LiftShaftSketch:
                 telescopic_left_ext=lift_config.telescopic_left_ext,
                 telescopic_right_ext=lift_config.telescopic_right_ext,
             )
+            if lift_config.double_entrance:
+                draw_lift_doors(
+                    ax,
+                    center_x=door_center_x,
+                    wall_inner_y=shaft_interior_y,  # Rear wall inner face (bottom in mirrored bank)
+                    door_width=lift_config.door_width,
+                    door_extension=lift_config.door_extension,
+                    door_thickness=lift_config.door_panel_thickness,
+                    mirrored=False,
+                    door_opening_type=lift_config.door_opening_type,
+                    telescopic_left_ext=lift_config.telescopic_left_ext,
+                    telescopic_right_ext=lift_config.telescopic_right_ext,
+                )
 
         # Draw counterweight bracket
         if display_options["show_brackets"]:
@@ -2429,6 +2525,7 @@ class LiftShaftSketch:
                 fc_depth,
                 mirrored=True,  # Doors at top for Bank 2
                 door_width=lift_config.door_width,
+                double_entrance=lift_config.double_entrance,
                 lift_type=lift_config.lift_type,
                 door_opening_type=lift_config.door_opening_type,
             )
@@ -2544,6 +2641,7 @@ class LiftShaftSketch:
                 fc_depth,
                 mirrored=True,  # Doors at top for Bank 2
                 door_width=lift_config.door_width,
+                double_entrance=lift_config.double_entrance,
                 lift_type=lift_config.lift_type,
                 door_opening_type=lift_config.door_opening_type,
             )
@@ -2660,7 +2758,7 @@ class LiftShaftSketch:
             # Calculate car positions based on machine type and mirror state
             mirror = (lift_idx % 2 == 1)
 
-            if lift.lift_machine_type == "mra":
+            if lift.uses_mra_layout:
                 left_cb = lift.mra_car_bracket_width
                 right_cb = lift.mra_right_bracket_width
                 available_w = lift.shaft_width - left_cb - right_cb
@@ -2715,7 +2813,7 @@ class LiftShaftSketch:
                 )
 
                 # Bracket widths (level 2)
-                if lift.lift_machine_type == "mra":
+                if lift.uses_mra_layout:
                     # MRA: Dynamic left bracket (shaft wall to car left edge)
                     left_cb = lift.mra_car_bracket_width
                     right_cb = lift.mra_right_bracket_width
@@ -2806,7 +2904,7 @@ class LiftShaftSketch:
                 )
 
                 # Bracket widths (level 2)
-                if lift.lift_machine_type == "mra":
+                if lift.uses_mra_layout:
                     # MRA: Dynamic left bracket (shaft wall to car left edge)
                     left_cb = lift.mra_car_bracket_width
                     right_cb = lift.mra_right_bracket_width
@@ -2984,7 +3082,7 @@ class LiftShaftSketch:
         first_door_zone = 2 * first_lift.door_panel_thickness + config.DEFAULT_DOOR_GAP
 
         # Car X: center car in available space between brackets (same as per-lift loop)
-        if first_lift.lift_machine_type == "mra":
+        if first_lift.uses_mra_layout:
             left_cb = first_lift.mra_car_bracket_width
             right_cb = first_lift.mra_right_bracket_width
             available_w = first_lift.shaft_width - left_cb - right_cb

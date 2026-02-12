@@ -688,6 +688,7 @@ def draw_lift_car(
     car_wall_thickness: float = None,
     mirrored: bool = False,
     door_width: float = None,
+    double_entrance: bool = False,
     lift_type: str = "passenger",
     door_opening_type: str = "centre",
 ) -> None:
@@ -711,6 +712,7 @@ def draw_lift_car(
         car_wall_thickness: Thickness between unfinished and finished (mm)
         mirrored: If True, doors are at top (Bank 2), open unfinished outline at top
         door_width: Door opening width for front return calculation (mm)
+        double_entrance: If True, draw front returns on both door and rear sides
         lift_type: Lift type ('passenger' or 'fire')
         door_opening_type: Door opening type ('centre' or 'telescopic')
     """
@@ -763,6 +765,7 @@ def draw_lift_car(
         ax.plot([x, x + unfinished_width], [y + unfinished_depth, y + unfinished_depth], **unfinished_line_style)
 
     # Draw front returns (two rectangles at the door-side edge of the finished car)
+    # For double entrance, mirror the same returns to the opposite edge as well.
     if door_width is not None and door_width < finished_width:
         front_return_depth = 100  # mm
 
@@ -770,34 +773,40 @@ def draw_lift_car(
         left_return_width = (finished_width - door_width) / 2
         right_return_width = left_return_width
 
+        def _draw_returns(return_y: float) -> None:
+            # Left front return
+            if left_return_width > 0:
+                ax.add_patch(Rectangle(
+                    (finished_x, return_y),
+                    left_return_width, front_return_depth,
+                    facecolor="none",
+                    edgecolor=config.FINISHED_CAR_EDGE_COLOR,
+                    linewidth=config.CAR_EDGE_WIDTH,
+                    zorder=6,
+                ))
+
+            # Right front return
+            if right_return_width > 0:
+                ax.add_patch(Rectangle(
+                    (finished_x + finished_width - right_return_width, return_y),
+                    right_return_width, front_return_depth,
+                    facecolor="none",
+                    edgecolor=config.FINISHED_CAR_EDGE_COLOR,
+                    linewidth=config.CAR_EDGE_WIDTH,
+                    zorder=6,
+                ))
+
         if mirrored:
             # Doors at top: front returns at top edge of finished car
             return_y = finished_y + finished_depth - front_return_depth
+            rear_return_y = finished_y
         else:
             # Doors at bottom: front returns at bottom edge of finished car
             return_y = finished_y
-
-        # Left front return
-        if left_return_width > 0:
-            ax.add_patch(Rectangle(
-                (finished_x, return_y),
-                left_return_width, front_return_depth,
-                facecolor="none",
-                edgecolor=config.FINISHED_CAR_EDGE_COLOR,
-                linewidth=config.CAR_EDGE_WIDTH,
-                zorder=6,
-            ))
-
-        # Right front return
-        if right_return_width > 0:
-            ax.add_patch(Rectangle(
-                (finished_x + finished_width - right_return_width, return_y),
-                right_return_width, front_return_depth,
-                facecolor="none",
-                edgecolor=config.FINISHED_CAR_EDGE_COLOR,
-                linewidth=config.CAR_EDGE_WIDTH,
-                zorder=6,
-            ))
+            rear_return_y = finished_y + finished_depth - front_return_depth
+        _draw_returns(return_y)
+        if double_entrance:
+            _draw_returns(rear_return_y)
 
     # Draw guide rail symbols on left and right edges of unfinished car
     car_vertical_center = y + unfinished_depth / 2
