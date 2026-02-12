@@ -20,7 +20,7 @@ DEFAULT_SHARED_WALL_THICKNESS = 200  # Dividing wall between lifts
 # =============================================================================
 
 FIRE_LIFT_MIN_SHAFT_WIDTH = 2700  # Minimum shaft width for fire lifts
-FIRE_LIFT_MIN_SHAFT_WIDTH_TELESCOPIC = 2550  # Minimum shaft width for fire lifts with telescopic doors
+FIRE_LIFT_MIN_SHAFT_WIDTH_TELESCOPIC = 2450  # Minimum shaft width for fire lifts with telescopic doors
 FIRE_LIFT_DOOR_WIDTH = 1200  # Fire lift door width
 
 # =============================================================================
