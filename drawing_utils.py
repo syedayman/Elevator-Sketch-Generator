@@ -571,12 +571,12 @@ def draw_counterweight_bracket(
         # U-shape open on left: bottom edge, right edge, top edge
         outer_x = [box_x, box_x + box_width, box_x + box_width, box_x]
         outer_y = [box_y, box_y, box_y + box_height, box_y + box_height]
-        ax.plot(outer_x, outer_y, color=edge_color, linewidth=edge_width, zorder=2, solid_capstyle='butt')
+        ax.plot(outer_x, outer_y, color=edge_color, linewidth=edge_width, zorder=4, solid_capstyle='butt')
 
         # Inner outline U-shape (open on left)
         inner_x = [box_x, box_x + box_width - frame_thickness, box_x + box_width - frame_thickness, box_x]
         inner_y = [box_y + frame_thickness, box_y + frame_thickness, box_y + box_height - frame_thickness, box_y + box_height - frame_thickness]
-        ax.plot(inner_x, inner_y, color=edge_color, linewidth=edge_width, zorder=2, solid_capstyle='butt')
+        ax.plot(inner_x, inner_y, color=edge_color, linewidth=edge_width, zorder=4, solid_capstyle='butt')
 
         # Draw frame fill (green) - 3 bars (no left bar)
         # Top frame bar
@@ -601,12 +601,12 @@ def draw_counterweight_bracket(
         # U-shape open on right: top edge, left edge, bottom edge
         outer_x = [box_x + box_width, box_x, box_x, box_x + box_width]
         outer_y = [box_y, box_y, box_y + box_height, box_y + box_height]
-        ax.plot(outer_x, outer_y, color=edge_color, linewidth=edge_width, zorder=2, solid_capstyle='butt')
+        ax.plot(outer_x, outer_y, color=edge_color, linewidth=edge_width, zorder=4, solid_capstyle='butt')
 
         # Inner outline U-shape (open on right)
         inner_x = [box_x + box_width, box_x + frame_thickness, box_x + frame_thickness, box_x + box_width]
         inner_y = [box_y + frame_thickness, box_y + frame_thickness, box_y + box_height - frame_thickness, box_y + box_height - frame_thickness]
-        ax.plot(inner_x, inner_y, color=edge_color, linewidth=edge_width, zorder=2, solid_capstyle='butt')
+        ax.plot(inner_x, inner_y, color=edge_color, linewidth=edge_width, zorder=4, solid_capstyle='butt')
 
         # Draw frame fill (green) - 3 bars (no right bar)
         # Top frame bar
@@ -641,8 +641,8 @@ def draw_counterweight_bracket(
             cw_width,
             cw_height,
             facecolor=config.CW_BOX_COLOR,
-            edgecolor="#404040",
-            linewidth=0.8,
+            edgecolor=config.BRACKET_EDGE_COLOR,
+            linewidth=config.BRACKET_EDGE_WIDTH,
             zorder=3,
         )
         ax.add_patch(counterweight)
@@ -1464,12 +1464,12 @@ def draw_counterweight_bracket_top(
         # U-shape open on bottom (flipped on Y axis for Bank 2)
         outer_x = [box_x, box_x, box_x + box_width, box_x + box_width]
         outer_y = [box_y, box_y + frame_visible_depth, box_y + frame_visible_depth, box_y]
-        ax.plot(outer_x, outer_y, color=edge_color, linewidth=edge_width, zorder=2, solid_capstyle='butt')
+        ax.plot(outer_x, outer_y, color=edge_color, linewidth=edge_width, zorder=4, solid_capstyle='butt')
 
         # Inner outline U-shape (open on bottom)
         inner_x = [box_x + frame_thickness, box_x + frame_thickness, box_x + box_width - frame_thickness, box_x + box_width - frame_thickness]
         inner_y = [box_y, box_y + frame_visible_depth - frame_thickness, box_y + frame_visible_depth - frame_thickness, box_y]
-        ax.plot(inner_x, inner_y, color=edge_color, linewidth=edge_width, zorder=2, solid_capstyle='butt')
+        ax.plot(inner_x, inner_y, color=edge_color, linewidth=edge_width, zorder=4, solid_capstyle='butt')
 
         # Draw frame fill (green) - 3 bars (no bottom bar, top bar instead)
         # Top frame bar
@@ -1505,12 +1505,12 @@ def draw_counterweight_bracket_top(
         # U-shape open on top (normal orientation)
         outer_x = [box_x, box_x, box_x + box_width, box_x + box_width]
         outer_y = [box_y + frame_visible_depth, box_y, box_y, box_y + frame_visible_depth]
-        ax.plot(outer_x, outer_y, color=edge_color, linewidth=edge_width, zorder=2, solid_capstyle='butt')
+        ax.plot(outer_x, outer_y, color=edge_color, linewidth=edge_width, zorder=4, solid_capstyle='butt')
 
         # Inner outline U-shape (open on top)
         inner_x = [box_x + frame_thickness, box_x + frame_thickness, box_x + box_width - frame_thickness, box_x + box_width - frame_thickness]
         inner_y = [box_y + frame_visible_depth, box_y + frame_thickness, box_y + frame_thickness, box_y + frame_visible_depth]
-        ax.plot(inner_x, inner_y, color=edge_color, linewidth=edge_width, zorder=2, solid_capstyle='butt')
+        ax.plot(inner_x, inner_y, color=edge_color, linewidth=edge_width, zorder=4, solid_capstyle='butt')
 
         # Draw frame fill (green) - 3 bars (no top bar)
         # Bottom frame bar
@@ -1547,8 +1547,8 @@ def draw_counterweight_bracket_top(
         cw_width,
         cw_depth,
         facecolor=config.CW_BOX_COLOR,
-        edgecolor="#404040",
-        linewidth=0.8,
+        edgecolor=config.BRACKET_EDGE_COLOR,
+        linewidth=config.BRACKET_EDGE_WIDTH,
         zorder=3,
     )
     ax.add_patch(counterweight)
@@ -1585,7 +1585,7 @@ def draw_car_bracket_cw_side(
         height,
         facecolor=config.CAR_BRACKET_BOX_COLOR,
         edgecolor="#000000",
-        linewidth=0.8,
+        linewidth=config.BRACKET_EDGE_WIDTH,
         zorder=3,
     )
     ax.add_patch(bracket)
@@ -1642,7 +1642,7 @@ def draw_car_brackets_mra(
         box_height,
         facecolor=config.CAR_BRACKET_BOX_COLOR,
         edgecolor="#000000",
-        linewidth=0.8,
+        linewidth=config.BRACKET_EDGE_WIDTH,
         zorder=3,
     ))
 
@@ -1654,7 +1654,7 @@ def draw_car_brackets_mra(
         box_height,
         facecolor=config.CAR_BRACKET_BOX_COLOR,
         edgecolor="#000000",
-        linewidth=0.8,
+        linewidth=config.BRACKET_EDGE_WIDTH,
         zorder=3,
     ))
 

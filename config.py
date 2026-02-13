@@ -38,13 +38,13 @@ CW_BOX_HEIGHT = 1000  # Visual outer box height
 
 # Counterweight frame styling (double-outline frame)
 CW_FRAME_THICKNESS = 50       # Frame border thickness (mm)
-CW_FRAME_COLOR = "#4CAF50"    # Green fill for frame
-CW_BOX_COLOR = "#FFD700"      # Yellow fill for inner CW box
+CW_FRAME_COLOR = "#FFFFFF"    # White fill for frame
+CW_BOX_COLOR = "#FFFFFF"      # White fill for inner CW box
 
-# Car bracket box visual dimensions (blue box opposite side of counterweight)
+# Car bracket box visual dimensions (opposite side of counterweight)
 CAR_BRACKET_BOX_WIDTH = 275     # Visual box width (mm)
 CAR_BRACKET_BOX_HEIGHT = 450    # Visual box height (mm)
-CAR_BRACKET_BOX_COLOR = "#3B82F6"  # Blue fill color
+CAR_BRACKET_BOX_COLOR = "#FFFFFF"  # White fill
 
 DEFAULT_CAR_BRACKET_WIDTH = 375  # Right bracket width
 DEFAULT_LIFT_CAPACITY = 1350  # Default capacity in KG
@@ -86,9 +86,9 @@ FINISHED_CAR_EDGE_COLOR = "#404040"  # Dark gray for finished car outline
 UNFINISHED_CAR_EDGE_COLOR = "#606060"  # Medium gray for unfinished car outline
 
 # Bracket colors
-COUNTERWEIGHT_BRACKET_COLOR = "#B0B0B0"  # Gray for counterweight bracket
-CAR_BRACKET_COLOR = "#C8C8C8"  # Lighter gray for car bracket
-BRACKET_EDGE_COLOR = "#505050"  # Dark gray for bracket outline
+COUNTERWEIGHT_BRACKET_COLOR = "#FFFFFF"  # White fill for counterweight bracket
+CAR_BRACKET_COLOR = "#FFFFFF"  # White fill for car bracket
+BRACKET_EDGE_COLOR = "#000000"  # Black for bracket outline
 
 # Steel beam colors
 STEEL_BEAM_COLOR = "#FFFFFF"  # White for steel beam

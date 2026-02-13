@@ -990,7 +990,7 @@ class LiftShaftSketch:
                 config.CAR_BRACKET_BOX_HEIGHT,
                 facecolor=config.CAR_BRACKET_BOX_COLOR,
                 edgecolor="#000000",
-                linewidth=0.8,
+                linewidth=config.BRACKET_EDGE_WIDTH,
                 zorder=3,
             ))
 
@@ -2487,7 +2487,7 @@ class LiftShaftSketch:
                 config.CAR_BRACKET_BOX_HEIGHT,
                 facecolor=config.CAR_BRACKET_BOX_COLOR,
                 edgecolor="#000000",
-                linewidth=0.8,
+                linewidth=config.BRACKET_EDGE_WIDTH,
                 zorder=3,
             ))
 
