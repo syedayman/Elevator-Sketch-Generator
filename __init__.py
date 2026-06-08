@@ -21,8 +21,7 @@ Enhanced features:
 from .shaft_sketch import (
     LiftShaftSketch,
     LiftConfig,
-    determine_separator_type,
-    validate_fire_lift_positions,
+    determine_separator_types,
     FIRE_LIFT_CABIN_SIZES,
 )
 from .section_sketch import LiftSectionSketch, SectionConfig
@@ -33,8 +32,7 @@ __all__ = [
     "LiftSectionSketch",
     "LiftConfig",
     "SectionConfig",
-    "determine_separator_type",
-    "validate_fire_lift_positions",
+    "determine_separator_types",
     "FIRE_LIFT_CABIN_SIZES",
     "config",
 ]

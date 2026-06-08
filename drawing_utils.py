@@ -560,72 +560,88 @@ def draw_counterweight_bracket(
         box_x = x + width - box_width  # Right edge touches shaft edge (wall)
     box_y = y + (height - box_height) / 2
 
-    # Draw outer outline as U-shape (open on wall side)
-    # For align="left": open on left (wall side)
-    # For align="right": open on right (wall side)
     frame_color = config.CW_FRAME_COLOR
     edge_color = config.BRACKET_EDGE_COLOR
     edge_width = config.BRACKET_EDGE_WIDTH
+    frame_fill_style = dict(facecolor=frame_color, edgecolor="none", zorder=2)
+    outline_style = dict(
+        facecolor="none",
+        edgecolor=edge_color,
+        linewidth=edge_width,
+        zorder=3,
+        joinstyle="miter",
+        capstyle="butt",
+    )
 
     if align == "left":
-        # U-shape open on left: bottom edge, right edge, top edge
-        outer_x = [box_x, box_x + box_width, box_x + box_width, box_x]
-        outer_y = [box_y, box_y, box_y + box_height, box_y + box_height]
-        ax.plot(outer_x, outer_y, color=edge_color, linewidth=edge_width, zorder=4, solid_capstyle='butt')
-
-        # Inner outline U-shape (open on left)
-        inner_x = [box_x, box_x + box_width - frame_thickness, box_x + box_width - frame_thickness, box_x]
-        inner_y = [box_y + frame_thickness, box_y + frame_thickness, box_y + box_height - frame_thickness, box_y + box_height - frame_thickness]
-        ax.plot(inner_x, inner_y, color=edge_color, linewidth=edge_width, zorder=4, solid_capstyle='butt')
-
-        # Draw frame fill (green) - 3 bars (no left bar)
-        # Top frame bar
+        # Simple frame: fill bars + two rectangle outlines (outer + offset inner)
         ax.add_patch(Rectangle(
             (box_x, box_y + box_height - frame_thickness),
-            box_width, frame_thickness,
-            facecolor=frame_color, edgecolor="none", zorder=2
+            box_width,
+            frame_thickness,
+            **frame_fill_style,
         ))
-        # Bottom frame bar
         ax.add_patch(Rectangle(
             (box_x, box_y),
-            box_width, frame_thickness,
-            facecolor=frame_color, edgecolor="none", zorder=2
+            box_width,
+            frame_thickness,
+            **frame_fill_style,
         ))
-        # Right frame bar only
         ax.add_patch(Rectangle(
             (box_x + box_width - frame_thickness, box_y),
-            frame_thickness, box_height,
-            facecolor=frame_color, edgecolor="none", zorder=2
+            frame_thickness,
+            box_height,
+            **frame_fill_style,
+        ))
+
+        # Outer rectangle
+        ax.add_patch(Rectangle(
+            (box_x, box_y),
+            box_width,
+            box_height,
+            **outline_style,
+        ))
+        # Inner rectangle: shifted up by thickness; width/height reduced
+        ax.add_patch(Rectangle(
+            (box_x, box_y + frame_thickness),
+            box_width - frame_thickness,
+            box_height - 2 * frame_thickness,
+            **outline_style,
         ))
     else:  # align == "right"
-        # U-shape open on right: top edge, left edge, bottom edge
-        outer_x = [box_x + box_width, box_x, box_x, box_x + box_width]
-        outer_y = [box_y, box_y, box_y + box_height, box_y + box_height]
-        ax.plot(outer_x, outer_y, color=edge_color, linewidth=edge_width, zorder=4, solid_capstyle='butt')
-
-        # Inner outline U-shape (open on right)
-        inner_x = [box_x + box_width, box_x + frame_thickness, box_x + frame_thickness, box_x + box_width]
-        inner_y = [box_y + frame_thickness, box_y + frame_thickness, box_y + box_height - frame_thickness, box_y + box_height - frame_thickness]
-        ax.plot(inner_x, inner_y, color=edge_color, linewidth=edge_width, zorder=4, solid_capstyle='butt')
-
-        # Draw frame fill (green) - 3 bars (no right bar)
-        # Top frame bar
+        # Simple frame: fill bars + two rectangle outlines (outer + offset inner)
         ax.add_patch(Rectangle(
             (box_x, box_y + box_height - frame_thickness),
-            box_width, frame_thickness,
-            facecolor=frame_color, edgecolor="none", zorder=2
+            box_width,
+            frame_thickness,
+            **frame_fill_style,
         ))
-        # Bottom frame bar
         ax.add_patch(Rectangle(
             (box_x, box_y),
-            box_width, frame_thickness,
-            facecolor=frame_color, edgecolor="none", zorder=2
+            box_width,
+            frame_thickness,
+            **frame_fill_style,
         ))
-        # Left frame bar only
         ax.add_patch(Rectangle(
             (box_x, box_y),
-            frame_thickness, box_height,
-            facecolor=frame_color, edgecolor="none", zorder=2
+            frame_thickness,
+            box_height,
+            **frame_fill_style,
+        ))
+
+        # Outer rectangle
+        ax.add_patch(Rectangle(
+            (box_x, box_y),
+            box_width,
+            box_height,
+            **outline_style,
+        ))
+        # Inner rectangle: shifted up+right by thickness; width/height reduced
+        ax.add_patch(Rectangle(
+            (box_x + frame_thickness, box_y + frame_thickness),
+            box_width - frame_thickness,
+            box_height - 2 * frame_thickness,
+            **outline_style,
         ))
 
     # Draw inner CW box (elongated: 35% width x 80% height of original box)
@@ -688,9 +704,9 @@ def draw_lift_car(
     car_wall_thickness: float = None,
     mirrored: bool = False,
     door_width: float = None,
-    double_entrance: bool = False,
     lift_type: str = "passenger",
     door_opening_type: str = "centre",
+    double_entrance: bool = False,
 ) -> None:
     """
     Draw the lift car with both unfinished and finished boundaries.
@@ -712,7 +728,6 @@ def draw_lift_car(
         car_wall_thickness: Thickness between unfinished and finished (mm)
         mirrored: If True, doors are at top (Bank 2), open unfinished outline at top
         door_width: Door opening width for front return calculation (mm)
-        double_entrance: If True, draw front returns on both door and rear sides
         lift_type: Lift type ('passenger' or 'fire')
         door_opening_type: Door opening type ('centre' or 'telescopic')
     """
@@ -765,7 +780,6 @@ def draw_lift_car(
         ax.plot([x, x + unfinished_width], [y + unfinished_depth, y + unfinished_depth], **unfinished_line_style)
 
     # Draw front returns (two rectangles at the door-side edge of the finished car)
-    # For double entrance, mirror the same returns to the opposite edge as well.
     if door_width is not None and door_width < finished_width:
         front_return_depth = 100  # mm
 
@@ -773,40 +787,66 @@ def draw_lift_car(
         left_return_width = (finished_width - door_width) / 2
         right_return_width = left_return_width
 
-        def _draw_returns(return_y: float) -> None:
-            # Left front return
-            if left_return_width > 0:
-                ax.add_patch(Rectangle(
-                    (finished_x, return_y),
-                    left_return_width, front_return_depth,
-                    facecolor="none",
-                    edgecolor=config.FINISHED_CAR_EDGE_COLOR,
-                    linewidth=config.CAR_EDGE_WIDTH,
-                    zorder=6,
-                ))
-
-            # Right front return
-            if right_return_width > 0:
-                ax.add_patch(Rectangle(
-                    (finished_x + finished_width - right_return_width, return_y),
-                    right_return_width, front_return_depth,
-                    facecolor="none",
-                    edgecolor=config.FINISHED_CAR_EDGE_COLOR,
-                    linewidth=config.CAR_EDGE_WIDTH,
-                    zorder=6,
-                ))
-
         if mirrored:
             # Doors at top: front returns at top edge of finished car
             return_y = finished_y + finished_depth - front_return_depth
-            rear_return_y = finished_y
         else:
             # Doors at bottom: front returns at bottom edge of finished car
             return_y = finished_y
-            rear_return_y = finished_y + finished_depth - front_return_depth
-        _draw_returns(return_y)
-        if double_entrance:
-            _draw_returns(rear_return_y)
+
+        # Left front return
+        if left_return_width > 0:
+            ax.add_patch(Rectangle(
+                (finished_x, return_y),
+                left_return_width, front_return_depth,
+                facecolor="none",
+                edgecolor=config.FINISHED_CAR_EDGE_COLOR,
+                linewidth=config.CAR_EDGE_WIDTH,
+                zorder=6,
+            ))
+
+        # Right front return
+        if right_return_width > 0:
+            ax.add_patch(Rectangle(
+                (finished_x + finished_width - right_return_width, return_y),
+                right_return_width, front_return_depth,
+                facecolor="none",
+                edgecolor=config.FINISHED_CAR_EDGE_COLOR,
+                linewidth=config.CAR_EDGE_WIDTH,
+                zorder=6,
+            ))
+
+    # Draw rear front returns for double entrance (at the rear door-side edge of finished car)
+    if double_entrance and door_width is not None and door_width < finished_width:
+        rear_return_depth = 100  # mm
+        left_return_width = (finished_width - door_width) / 2
+        right_return_width = left_return_width
+
+        if mirrored:
+            # Mirrored: rear is at bottom edge of finished car
+            rear_return_y = finished_y
+        else:
+            # Normal: rear is at top edge of finished car
+            rear_return_y = finished_y + finished_depth - rear_return_depth
+
+        if left_return_width > 0:
+            ax.add_patch(Rectangle(
+                (finished_x, rear_return_y),
+                left_return_width, rear_return_depth,
+                facecolor="none",
+                edgecolor=config.FINISHED_CAR_EDGE_COLOR,
+                linewidth=config.CAR_EDGE_WIDTH,
+                zorder=6,
+            ))
+        if right_return_width > 0:
+            ax.add_patch(Rectangle(
+                (finished_x + finished_width - right_return_width, rear_return_y),
+                right_return_width, rear_return_depth,
+                facecolor="none",
+                edgecolor=config.FINISHED_CAR_EDGE_COLOR,
+                linewidth=config.CAR_EDGE_WIDTH,
+                zorder=6,
+            ))
 
     # Draw guide rail symbols on left and right edges of unfinished car
     car_vertical_center = y + unfinished_depth / 2
@@ -1455,42 +1495,57 @@ def draw_counterweight_bracket_top(
     box_y = bracket_y  # Bottom edge touches car top
     box_width = frame_width  # For drawing the green frame
 
-    # Draw outer outline as U-shape
     edge_color = config.BRACKET_EDGE_COLOR
     edge_width = config.BRACKET_EDGE_WIDTH
     frame_color = config.CW_FRAME_COLOR
+    frame_fill_style = dict(
+        facecolor=frame_color,
+        edgecolor="none",
+        zorder=2,
+    )
+    outline_style = dict(
+        facecolor="none",
+        edgecolor=edge_color,
+        linewidth=edge_width,
+        zorder=3,
+        joinstyle="miter",
+        capstyle="butt",
+    )
 
     if mirrored:
-        # U-shape open on bottom (flipped on Y axis for Bank 2)
-        outer_x = [box_x, box_x, box_x + box_width, box_x + box_width]
-        outer_y = [box_y, box_y + frame_visible_depth, box_y + frame_visible_depth, box_y]
-        ax.plot(outer_x, outer_y, color=edge_color, linewidth=edge_width, zorder=4, solid_capstyle='butt')
-
-        # Inner outline U-shape (open on bottom)
-        inner_x = [box_x + frame_thickness, box_x + frame_thickness, box_x + box_width - frame_thickness, box_x + box_width - frame_thickness]
-        inner_y = [box_y, box_y + frame_visible_depth - frame_thickness, box_y + frame_visible_depth - frame_thickness, box_y]
-        ax.plot(inner_x, inner_y, color=edge_color, linewidth=edge_width, zorder=4, solid_capstyle='butt')
-
-        # Draw frame fill (green) - 3 bars (no bottom bar, top bar instead)
-        # Top frame bar
+        # Simple frame: fill bars + two rectangle outlines (outer + offset inner).
         ax.add_patch(Rectangle(
             (box_x, box_y + frame_visible_depth - frame_thickness),
-            box_width, frame_thickness,
-            facecolor=frame_color, edgecolor="none", zorder=2
+            box_width,
+            frame_thickness,
+            **frame_fill_style,
         ))
-
-        # Left frame bar
         ax.add_patch(Rectangle(
             (box_x, box_y),
-            frame_thickness, frame_visible_depth,
-            facecolor=frame_color, edgecolor="none", zorder=2
+            frame_thickness,
+            frame_visible_depth,
+            **frame_fill_style,
         ))
-
-        # Right frame bar
         ax.add_patch(Rectangle(
             (box_x + box_width - frame_thickness, box_y),
-            frame_thickness, frame_visible_depth,
-            facecolor=frame_color, edgecolor="none", zorder=2
+            frame_thickness,
+            frame_visible_depth,
+            **frame_fill_style,
+        ))
+
+        # Outer rectangle
+        ax.add_patch(Rectangle(
+            (box_x, box_y),
+            box_width,
+            frame_visible_depth,
+            **outline_style,
+        ))
+        # Inner rectangle: shifted right by thickness; reduced width/depth
+        ax.add_patch(Rectangle(
+            (box_x + frame_thickness, box_y),
+            box_width - 2 * frame_thickness,
+            frame_visible_depth - frame_thickness,
+            **outline_style,
         ))
 
         # Draw inner CW box (yellow) - positioned relative to top bar
@@ -1502,36 +1557,39 @@ def draw_counterweight_bracket_top(
         cw_y = box_y + (inner_area_depth - cw_depth) / 2  # Offset from bottom (open side)
 
     else:
-        # U-shape open on top (normal orientation)
-        outer_x = [box_x, box_x, box_x + box_width, box_x + box_width]
-        outer_y = [box_y + frame_visible_depth, box_y, box_y, box_y + frame_visible_depth]
-        ax.plot(outer_x, outer_y, color=edge_color, linewidth=edge_width, zorder=4, solid_capstyle='butt')
-
-        # Inner outline U-shape (open on top)
-        inner_x = [box_x + frame_thickness, box_x + frame_thickness, box_x + box_width - frame_thickness, box_x + box_width - frame_thickness]
-        inner_y = [box_y + frame_visible_depth, box_y + frame_thickness, box_y + frame_thickness, box_y + frame_visible_depth]
-        ax.plot(inner_x, inner_y, color=edge_color, linewidth=edge_width, zorder=4, solid_capstyle='butt')
-
-        # Draw frame fill (green) - 3 bars (no top bar)
-        # Bottom frame bar
+        # Simple frame: fill bars + two rectangle outlines (outer + offset inner).
         ax.add_patch(Rectangle(
             (box_x, box_y),
-            box_width, frame_thickness,
-            facecolor=frame_color, edgecolor="none", zorder=2
+            box_width,
+            frame_thickness,
+            **frame_fill_style,
         ))
-
-        # Left frame bar
         ax.add_patch(Rectangle(
             (box_x, box_y),
-            frame_thickness, frame_visible_depth,
-            facecolor=frame_color, edgecolor="none", zorder=2
+            frame_thickness,
+            frame_visible_depth,
+            **frame_fill_style,
         ))
-
-        # Right frame bar
         ax.add_patch(Rectangle(
             (box_x + box_width - frame_thickness, box_y),
-            frame_thickness, frame_visible_depth,
-            facecolor=frame_color, edgecolor="none", zorder=2
+            frame_thickness,
+            frame_visible_depth,
+            **frame_fill_style,
+        ))
+
+        # Outer rectangle
+        ax.add_patch(Rectangle(
+            (box_x, box_y),
+            box_width,
+            frame_visible_depth,
+            **outline_style,
+        ))
+        # Inner rectangle: shifted right+up by thickness; reduced width/depth
+        ax.add_patch(Rectangle(
+            (box_x + frame_thickness, box_y + frame_thickness),
+            box_width - 2 * frame_thickness,
+            frame_visible_depth - frame_thickness,
+            **outline_style,
         ))
 
         # Draw inner CW box (yellow) - centered within the green frame
@@ -1584,7 +1642,7 @@ def draw_car_bracket_cw_side(
         width,
         height,
         facecolor=config.CAR_BRACKET_BOX_COLOR,
-        edgecolor="#000000",
+        edgecolor=config.BRACKET_EDGE_COLOR,
         linewidth=config.BRACKET_EDGE_WIDTH,
         zorder=3,
     )
@@ -1641,7 +1699,7 @@ def draw_car_brackets_mra(
         left_w,
         box_height,
         facecolor=config.CAR_BRACKET_BOX_COLOR,
-        edgecolor="#000000",
+        edgecolor=config.BRACKET_EDGE_COLOR,
         linewidth=config.BRACKET_EDGE_WIDTH,
         zorder=3,
     ))
@@ -1653,7 +1711,7 @@ def draw_car_brackets_mra(
         right_w,
         box_height,
         facecolor=config.CAR_BRACKET_BOX_COLOR,
-        edgecolor="#000000",
+        edgecolor=config.BRACKET_EDGE_COLOR,
         linewidth=config.BRACKET_EDGE_WIDTH,
         zorder=3,
     ))

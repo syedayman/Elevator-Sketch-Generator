@@ -10,9 +10,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use('Agg')  # Non-interactive backend for PNG generation
+import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 
 # Support both package (relative) and standalone (absolute) imports
@@ -22,7 +22,6 @@ try:
     from .drawing_utils import (
         draw_wall_section,
         draw_dimension_line,
-        draw_title_block,
         draw_section_pit,
         draw_break_lines,
         draw_section_landing,
@@ -35,7 +34,6 @@ except ImportError:
     from drawing_utils import (
         draw_wall_section,
         draw_dimension_line,
-        draw_title_block,
         draw_section_pit,
         draw_break_lines,
         draw_section_landing,
@@ -89,8 +87,7 @@ class LiftSectionSketch:
     def __init__(
         self,
         # Simple API (backward compatible with plan sketch dimensions)
-        shaft_width: float = None,
-        shaft_depth: float = None,  # Used as internal width in section view
+        shaft_depth: float = None,
         wall_thickness: float = None,
         door_width: float = None,
         # Enhanced API
@@ -101,8 +98,7 @@ class LiftSectionSketch:
         Initialize lift section sketch generator.
 
         Args:
-            shaft_width: Shaft width for section view (horizontal, mm)
-            shaft_depth: Shaft depth from plan view (used for wall positioning, mm)
+            shaft_depth: Shaft depth (horizontal dimension in section view, mm)
             wall_thickness: RCC wall thickness (mm)
             door_width: Door opening width (mm)
             lift_config: LiftConfig from plan sketch (for dimensional consistency)
@@ -113,7 +109,6 @@ class LiftSectionSketch:
 
         # Determine dimensions from lift_config or defaults
         if lift_config is not None:
-            self.shaft_width = lift_config.shaft_width
             self.shaft_depth = lift_config.effective_shaft_depth
             self.wall_thickness = lift_config.wall_thickness
             self.door_width = lift_config.door_width
@@ -126,7 +121,6 @@ class LiftSectionSketch:
             self.unfinished_car_depth = lift_config.unfinished_car_depth
             self.machine_type = lift_config.lift_machine_type
         else:
-            self.shaft_width = shaft_width or config.DEFAULT_SHAFT_WIDTH
             self.shaft_depth = shaft_depth or config.DEFAULT_SHAFT_DEPTH
             self.wall_thickness = wall_thickness or config.DEFAULT_WALL_THICKNESS
             self.door_width = door_width or config.DEFAULT_DOOR_WIDTH
@@ -138,6 +132,10 @@ class LiftSectionSketch:
             self.unfinished_car_width = config.DEFAULT_FINISHED_CAR_WIDTH + 2 * config.DEFAULT_CAR_WALL_THICKNESS
             self.unfinished_car_depth = config.DEFAULT_FINISHED_CAR_DEPTH + config.DEFAULT_CAR_WALL_THICKNESS
             self.machine_type = "mrl"
+
+        # Override door/structural heights from section config
+        self.door_height = self.section_config.door_height
+        self.structural_opening_height = self.section_config.structural_opening_height
 
         # Section-specific parameters
         self.pit_slab = self.section_config.pit_slab
@@ -153,7 +151,7 @@ class LiftSectionSketch:
     def _calculate_geometry(self) -> None:
         """Calculate section geometry based on parameters."""
         # Total width including walls
-        self.total_width = self.shaft_width + 2 * self.wall_thickness
+        self.total_width = self.shaft_depth + 2 * self.wall_thickness
 
         # Vertical geometry
         # Ground floor level is at y=0 in the drawing (top of pit slab)
@@ -310,7 +308,7 @@ class LiftSectionSketch:
     ) -> None:
         """Draw the complete section sketch."""
         wt = self.wall_thickness
-        sw = self.shaft_width
+        sw = self.shaft_depth
 
         # Calculate y positions for the simplified view
         pit_bottom = -self.pit_slab
@@ -588,15 +586,10 @@ class LiftSectionSketch:
 
         # Set axis limits with margins
         margin_x = 1500  # Horizontal margin for dimensions
-        margin_bottom = 1000  # Bottom margin for title and dimensions
+        margin_bottom = 500  # Bottom margin for dimensions
         margin_top = 500  # Top margin
         ax.set_xlim(-margin_x, self.total_width + margin_x)
         ax.set_ylim(pit_bottom - margin_bottom, machine_room_top + margin_top)
-
-        # Draw title
-        if title is None:
-            title = "LIFT SHAFT SECTION"
-        draw_title_block(ax, title, subtitle, y_position=pit_bottom - 700)
 
     def _draw_section_dimensions(
         self,
@@ -610,7 +603,7 @@ class LiftSectionSketch:
     ) -> None:
         """Draw dimension annotations for section view."""
         wt = self.wall_thickness
-        sw = self.shaft_width
+        sw = self.shaft_depth
         slab_thickness = wt  # 200mm, same as walls
 
         # Use ground_level if ground_floor_slab_y not provided
