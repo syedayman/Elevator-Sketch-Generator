@@ -2,3 +2,9 @@ CLAUDE.md
 .claude/
 __pycache__/
 output/
+
+# Secrets / environment (never commit)
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml

@@ -707,6 +707,7 @@ def draw_lift_car(
     lift_type: str = "passenger",
     door_opening_type: str = "centre",
     double_entrance: bool = False,
+    door_offset: float = 0,
 ) -> None:
     """
     Draw the lift car with both unfinished and finished boundaries.
@@ -730,6 +731,7 @@ def draw_lift_car(
         door_width: Door opening width for front return calculation (mm)
         lift_type: Lift type ('passenger' or 'fire')
         door_opening_type: Door opening type ('centre' or 'telescopic')
+        door_offset: Signed door X offset from cabin centre (+ = right/screen); shifts the front returns
     """
     if car_wall_thickness is None:
         car_wall_thickness = config.DEFAULT_CAR_WALL_THICKNESS
@@ -783,9 +785,10 @@ def draw_lift_car(
     if door_width is not None and door_width < finished_width:
         front_return_depth = 100  # mm
 
-        # Front returns are symmetric for all lift types when doors are centered on car
-        left_return_width = (finished_width - door_width) / 2
-        right_return_width = left_return_width
+        # Front returns are symmetric when the door is centred; a door offset
+        # (world +x = right) widens the left return and narrows the right one.
+        left_return_width = (finished_width - door_width) / 2 + door_offset
+        right_return_width = (finished_width - door_width) / 2 - door_offset
 
         if mirrored:
             # Doors at top: front returns at top edge of finished car
@@ -819,8 +822,8 @@ def draw_lift_car(
     # Draw rear front returns for double entrance (at the rear door-side edge of finished car)
     if double_entrance and door_width is not None and door_width < finished_width:
         rear_return_depth = 100  # mm
-        left_return_width = (finished_width - door_width) / 2
-        right_return_width = left_return_width
+        left_return_width = (finished_width - door_width) / 2 + door_offset
+        right_return_width = (finished_width - door_width) / 2 - door_offset
 
         if mirrored:
             # Mirrored: rear is at bottom edge of finished car
@@ -1051,6 +1054,7 @@ def _draw_door_inner_details(
     door_thickness: float,
     door_width: float,
     door_opening_center_x: float = None,
+    telescopic_side: str = None,
 ) -> None:
     """
     Draw inner frame lines and door panels inside a door rectangle.
@@ -1089,37 +1093,35 @@ def _draw_door_inner_details(
 
     # Calculate inner panel positions (centered horizontally, total width = door_width)
     door_center_x = door_opening_center_x if door_opening_center_x is not None else door_rect_left + door_rect_width / 2
-    panel_width = door_width / 2  # Each panel is half the door width
     panel_height = config.LIFT_DOOR_PANEL_HEIGHT
 
     # Panel y position (centered vertically between frame lines)
     panel_y = door_y + (door_thickness - panel_height) / 2
 
-    # Left panel
-    left_panel_x = door_center_x - door_width / 2
-    left_panel = Rectangle(
-        (left_panel_x, panel_y),
-        panel_width,
-        panel_height,
+    panel_props = dict(
         facecolor="none",
         edgecolor=config.LIFT_DOOR_EDGE_COLOR,
         linewidth=config.LIFT_DOOR_PANEL_EDGE_WIDTH,
         zorder=8,
     )
-    ax.add_patch(left_panel)
 
-    # Right panel
-    right_panel_x = door_center_x
-    right_panel = Rectangle(
-        (right_panel_x, panel_y),
-        panel_width,
-        panel_height,
-        facecolor="none",
-        edgecolor=config.LIFT_DOOR_EDGE_COLOR,
-        linewidth=config.LIFT_DOOR_PANEL_EDGE_WIDTH,
-        zorder=8,
-    )
-    ax.add_patch(right_panel)
+    if telescopic_side in ("left", "right"):
+        # Telescopic: a single bold rectangle staggered to one side. The two doors
+        # (near-wall -> left, deeper -> right) overlap at the centre by p on each
+        # side, so their union spans exactly door_width.
+        half = door_width / 2
+        p = config.TELESCOPIC_INNER_OVERLAP_RATIO * door_width
+        if telescopic_side == "left":
+            rx0, rx1 = door_center_x - half, door_center_x + p
+        else:
+            rx0, rx1 = door_center_x - p, door_center_x + half
+        ax.add_patch(Rectangle((rx0, panel_y), rx1 - rx0, panel_height, **panel_props))
+        return
+
+    # Centre opening: two panels side by side, each half the door width
+    panel_width = door_width / 2
+    ax.add_patch(Rectangle((door_center_x - door_width / 2, panel_y), panel_width, panel_height, **panel_props))
+    ax.add_patch(Rectangle((door_center_x, panel_y), panel_width, panel_height, **panel_props))
 
 
 def draw_lift_doors(
@@ -1196,6 +1198,12 @@ def draw_lift_doors(
         # Car door position (above landing door + gap)
         car_door_y = wall_inner_y + door_thickness + door_gap
 
+    # Telescopic: stagger the bold inner rectangle — near-wall door -> left, deeper -> right.
+    # (Mirrored Bank-2: the car door is the near-wall one, so the sides swap.)
+    _is_telescopic = door_opening_type == "telescopic"
+    landing_side = ("left" if not mirrored else "right") if _is_telescopic else None
+    car_side = ("right" if not mirrored else "left") if _is_telescopic else None
+
     # Draw landing door rectangle
     landing_door = Rectangle(
         (door_rect_left, landing_door_y),
@@ -1212,6 +1220,7 @@ def draw_lift_doors(
     _draw_door_inner_details(
         ax, door_rect_left, door_rect_width, landing_door_y, door_thickness, door_width,
         door_opening_center_x=center_x,
+        telescopic_side=landing_side,
     )
 
     # Draw car door rectangle
@@ -1230,6 +1239,7 @@ def draw_lift_doors(
     _draw_door_inner_details(
         ax, door_rect_left, door_rect_width, car_door_y, door_thickness, door_width,
         door_opening_center_x=center_x,
+        telescopic_side=car_side,
     )
 
     # Return geometry info for car connection

@@ -109,6 +109,17 @@ class LiftConfig:
     # Double entrance (fire lifts only: doors on both front and rear)
     double_entrance: bool = False
 
+    # Door horizontal offset from cabin centre (X axis); applies to all door types
+    door_offset_mm: float = 0  # magnitude in mm (0 = centred)
+    door_offset_direction: str = "right"  # "left" or "right"
+
+    @property
+    def door_offset_x(self) -> float:
+        """Signed door X offset from cabin centre (+ = right/screen, - = left)."""
+        if not self.door_offset_mm:
+            return 0.0
+        return self.door_offset_mm if self.door_offset_direction == "right" else -self.door_offset_mm
+
     @property
     def unfinished_car_width(self) -> float:
         """Unfinished car width = finished + 50mm (25mm each side)."""
@@ -745,7 +756,7 @@ class LiftShaftSketch:
                 car_center_x = wt + cwb_width + (available - uc_width) / 2 + uc_width / 2
 
             # Center door on car for all lift types
-            door_center_x = car_center_x
+            door_center_x = car_center_x + lift.door_offset_x
 
             opening_x = door_center_x - sow / 2
         else:
@@ -795,11 +806,15 @@ class LiftShaftSketch:
 
         # Draw centerlines
         if display_options["show_centerlines"]:
-            # Vertical centerline through shaft center
-            center_x = wt + sw / 2
-            draw_centerline(ax, (center_x, 0), (center_x, self.total_depth))
-            # Horizontal centerline through shaft center
-            center_y = wt + sd / 2
+            # Vertical centerline through car cabin center
+            draw_centerline(ax, (car_center_x, 0), (car_center_x, self.total_depth))
+            # Horizontal centerline through car cabin center (front-fixed car)
+            if self._use_enhanced_api and self.lifts:
+                lift = self.lifts[0]
+                door_zone = 2 * lift.door_panel_thickness + config.DEFAULT_DOOR_GAP
+                center_y = wt + door_zone + lift.finished_car_depth / 2
+            else:
+                center_y = wt + sd / 2
             draw_centerline(ax, (0, center_y), (self.total_width, center_y))
 
     def _draw_lift_interior(
@@ -854,7 +869,7 @@ class LiftShaftSketch:
             car_center_x = shaft_x + car_x_offset + uc_width / 2
 
         # Center door on car for all lift types
-        door_center_x = car_center_x
+        door_center_x = car_center_x + lift_config.door_offset_x
 
         # Draw lift doors first (if enabled)
         door_info = None
@@ -967,6 +982,7 @@ class LiftShaftSketch:
                 lift_type=lift_config.lift_type,
                 door_opening_type=lift_config.door_opening_type,
                 double_entrance=lift_config.double_entrance,
+                door_offset=lift_config.door_offset_x,
             )
 
             # Draw car interior details
@@ -1032,12 +1048,13 @@ class LiftShaftSketch:
 
         cw_bracket_depth = lift_config.mra_cw_bracket_depth
         car_center_x = car_x + uc_width / 2
+        door_center_x = car_center_x + lift_config.door_offset_x
 
         # Draw lift doors first (if enabled) - centered on car cabin
         if display_options.get("show_lift_doors", False):
             draw_lift_doors(
                 ax,
-                center_x=car_center_x,
+                center_x=door_center_x,
                 wall_inner_y=shaft_y,
                 door_width=lift_config.door_width,
                 door_extension=lift_config.door_extension,
@@ -1052,7 +1069,7 @@ class LiftShaftSketch:
                 rear_wall_inner_y = shaft_y + sd
                 draw_lift_doors(
                     ax,
-                    center_x=car_center_x,
+                    center_x=door_center_x,
                     wall_inner_y=rear_wall_inner_y,
                     door_width=lift_config.door_width,
                     door_extension=lift_config.door_extension,
@@ -1142,6 +1159,7 @@ class LiftShaftSketch:
                 lift_type=lift_config.lift_type,
                 door_opening_type=lift_config.door_opening_type,
                 double_entrance=lift_config.double_entrance,
+                door_offset=lift_config.door_offset_x,
             )
 
             # Draw car interior details
@@ -1230,7 +1248,7 @@ class LiftShaftSketch:
                 car_center_x = wt + cwb_width + (available - uc_width) / 2 + uc_width / 2
 
             # Center door on car for all lift types
-            door_center_x = car_center_x
+            door_center_x = car_center_x + lift.door_offset_x
         else:
             car_center_x = wt + sw / 2  # Shaft center as fallback
             door_center_x = car_center_x
@@ -1529,7 +1547,7 @@ class LiftShaftSketch:
                         car_center_x = shaft_left + cb_width + (available - uc_width) / 2 + uc_width / 2
 
                 # Center door on car for all lift types
-                door_center_x = car_center_x
+                door_center_x = car_center_x + lift_config.door_offset_x
 
                 opening_x = door_center_x - sow / 2
             else:
@@ -1581,8 +1599,8 @@ class LiftShaftSketch:
 
             # Draw centerlines for this lift - extend to each shaft's own depth
             if display_options["show_centerlines"]:
-                center_x = shaft_left + sw / 2
-                draw_centerline(ax, (center_x, 0), (center_x, sd + 2 * wt))
+                # Vertical centerline through this lift's car cabin center
+                draw_centerline(ax, (car_center_x, 0), (car_center_x, sd + 2 * wt))
 
             # Update x position
             if is_first:
@@ -1594,9 +1612,14 @@ class LiftShaftSketch:
         last_depth = self._shaft_depths[-1]
         draw_wall_section(ax, x_pos, 0, wt, last_depth + 2 * wt, display_options["show_hatching"])
 
-        # Horizontal centerline
+        # Horizontal centerline through car cabin center (front-fixed; first lift)
         if display_options["show_centerlines"]:
-            center_y = wt + max_sd / 2
+            if self._use_enhanced_api and self.lifts:
+                first = self.lifts[0]
+                door_zone = 2 * first.door_panel_thickness + config.DEFAULT_DOOR_GAP
+                center_y = wt + door_zone + first.finished_car_depth / 2
+            else:
+                center_y = wt + max_sd / 2
             draw_centerline(ax, (0, center_y), (self.total_width, center_y))
 
         # Draw dimensions
@@ -1671,7 +1694,7 @@ class LiftShaftSketch:
                         car_center_x = shaft_left + cb_width + (available - uc_width) / 2 + uc_width / 2
 
                 # Center door on car for all lift types
-                door_center_x = car_center_x
+                door_center_x = car_center_x + lift.door_offset_x
             else:
                 car_center_x = shaft_left + sw / 2  # Shaft center as fallback
                 door_center_x = car_center_x
@@ -2219,7 +2242,7 @@ class LiftShaftSketch:
                     car_center_x = shaft_left + cb_width + (available - uc_width) / 2 + uc_width / 2
 
             # Center door on car for all lift types
-            door_center_x = car_center_x
+            door_center_x = car_center_x + lift_config.door_offset_x
 
             opening_x = door_center_x - sow / 2
 
@@ -2303,7 +2326,8 @@ class LiftShaftSketch:
 
             # Draw centerlines for this lift - extend to each shaft's own depth
             if display_options["show_centerlines"]:
-                center_x = shaft_left + sw / 2
+                # Vertical centerline through this lift's car cabin center
+                center_x = car_center_x
                 if doors_face == "down":
                     draw_centerline(ax, (center_x, base_y), (center_x, base_y + sd + 2 * wt))
                 else:
@@ -2385,7 +2409,7 @@ class LiftShaftSketch:
             car_center_x = shaft_x + cb_width + (available - uc_width) / 2 + uc_width / 2
 
         # Center door on car for all lift types
-        door_center_x = car_center_x
+        door_center_x = car_center_x + lift_config.door_offset_x
 
         # In mirrored orientation, doors are at top (high Y), back is at bottom (low Y)
         # Car Y position: front-fixed (mirrored: door at top, so car top touches door zone)
@@ -2499,6 +2523,7 @@ class LiftShaftSketch:
                 lift_type=lift_config.lift_type,
                 door_opening_type=lift_config.door_opening_type,
                 double_entrance=lift_config.double_entrance,
+                door_offset=lift_config.door_offset_x,
             )
 
             # Draw car interior details
@@ -2559,13 +2584,14 @@ class LiftShaftSketch:
             car_x = shaft_x + left_cb + (available_w - uc_width) / 2
 
         car_center_x = car_x + uc_width / 2
+        door_center_x = car_center_x + lift_config.door_offset_x
         car_y = shaft_y + sd - 2 * lift_config.door_panel_thickness - config.DEFAULT_DOOR_GAP - uc_depth
 
         # Draw lift doors (at top of shaft)
         if display_options.get("show_lift_doors", False):
             draw_lift_doors(
                 ax,
-                center_x=car_center_x,
+                center_x=door_center_x,
                 wall_inner_y=shaft_y + sd,
                 door_width=lift_config.door_width,
                 door_extension=lift_config.door_extension,
@@ -2580,7 +2606,7 @@ class LiftShaftSketch:
             if lift_config.double_entrance:
                 draw_lift_doors(
                     ax,
-                    center_x=car_center_x,
+                    center_x=door_center_x,
                     wall_inner_y=shaft_y,
                     door_width=lift_config.door_width,
                     door_extension=lift_config.door_extension,
@@ -2663,6 +2689,7 @@ class LiftShaftSketch:
                 lift_type=lift_config.lift_type,
                 door_opening_type=lift_config.door_opening_type,
                 double_entrance=lift_config.double_entrance,
+                door_offset=lift_config.door_offset_x,
             )
 
             finished_car_x = car_x + (uc_width - fc_width) / 2
@@ -2814,7 +2841,7 @@ class LiftShaftSketch:
             finished_car_top_y = finished_car_y + lift.finished_car_depth
 
             # Center door on car for all lift types
-            door_center_x = car_center_x
+            door_center_x = car_center_x + lift.door_offset_x
 
             # --- Horizontal dimensions (above or below based on door orientation) ---
 
