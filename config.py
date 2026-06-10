@@ -30,7 +30,7 @@ FIRE_LIFT_DOOR_WIDTH = 1200  # Fire lift door width
 DEFAULT_FINISHED_CAR_WIDTH = 1900  # Interior finished car width
 DEFAULT_FINISHED_CAR_DEPTH = 1600  # Interior finished car depth
 DEFAULT_CAR_WALL_THICKNESS = 25  # Thickness between finished/unfinished car
-DEFAULT_COUNTERWEIGHT_BRACKET_WIDTH = 625  # Left bracket width
+DEFAULT_COUNTERWEIGHT_BRACKET_WIDTH = 625  # Left bracket zone = 525 bracket + 100 guide rail
 
 # Counterweight box visual dimensions (the gray box inside the bracket area)
 CW_BOX_WIDTH = 450    # Visual outer box width (slimmer bracket)
@@ -46,7 +46,7 @@ CAR_BRACKET_BOX_WIDTH = 275     # Visual box width (mm)
 CAR_BRACKET_BOX_HEIGHT = 450    # Visual box height (mm)
 CAR_BRACKET_BOX_COLOR = "#FFFFFF"  # White fill color
 
-DEFAULT_CAR_BRACKET_WIDTH = 375  # Right bracket width
+DEFAULT_CAR_BRACKET_WIDTH = 375  # Right bracket zone = 275 bracket + 100 guide rail
 DEFAULT_LIFT_CAPACITY = 1350  # Default capacity in KG
 
 # =============================================================================
@@ -150,13 +150,13 @@ DEFAULT_DOOR_GAP = 30               # Running clearance between landing and car 
 DEFAULT_DOOR_EXTENSION = 100        # Extension beyond door width on each side (mm)
 
 # Rear clearance (distance from back of car to rear wall)
-DEFAULT_REAR_CLEARANCE = 345        # Default rear clearance (mm)
+DEFAULT_REAR_CLEARANCE = 200        # Default rear clearance (mm)
 MIN_REAR_CLEARANCE = 200            # Minimum allowed rear clearance (mm)
 # Total door width = 2 × door_width + 2 × DEFAULT_DOOR_EXTENSION
 
 # Telescopic Door Parameters (fire lifts only)
-TELESCOPIC_RIGHT_EXTENSION = 150      # Extension beyond door_width on right side (mm)
-TELESCOPIC_LEFT_EXTENSION_EXTRA = 50  # Extra beyond 0.5 * door_width on left side (mm)
+TELESCOPIC_RIGHT_EXTENSION = 200      # Extension beyond door_width on right side (mm)
+TELESCOPIC_LEFT_EXTENSION_EXTRA = 100  # Extra beyond 0.5 * door_width on left side (mm)
 # Left extension formula: 0.5 * door_width + TELESCOPIC_LEFT_EXTENSION_EXTRA
 
 # Door styling
@@ -188,7 +188,7 @@ GUIDE_RAIL_BOX_WIDTH = 30       # Width of white rectangle (horizontal dimension
 GUIDE_RAIL_BOX_HEIGHT = 300     # Height of white rectangle (vertical dimension)
 
 # Guide rail T-shape dimensions
-GUIDE_RAIL_STEM_LENGTH = 38     # Length of horizontal stem extending from box
+GUIDE_RAIL_STEM_LENGTH = 45     # Stem length; guide-rail total = box(30) + stem(45) + bar(25) = 100mm
 GUIDE_RAIL_STEM_THICKNESS = 25  # Thickness of horizontal stem
 GUIDE_RAIL_BAR_HEIGHT = 75      # Height of vertical bar at end of stem
 GUIDE_RAIL_BAR_THICKNESS = 25   # Thickness of vertical bar
@@ -204,18 +204,21 @@ GUIDE_RAIL_LINE_WIDTH = 0.8            # Edge line width
 # =============================================================================
 
 # MRA Shaft Layout (space allocation for shaft depth calculation)
-MRA_CAR_BRACKET_WIDTH = 325       # Car bracket width (left and right sides)
-MRA_CW_BRACKET_DEPTH = 400        # CW bracket depth (at top of shaft)
-MRA_CW_GAP = 100                  # Gap between car top and CW bracket bottom
+MRA_CAR_BRACKET_WIDTH = 325       # Bracket zone each side = 225 bracket + 100 guide rail
+MRA_CW_BRACKET_DEPTH = 425        # CW bracket depth (height of the CW box)
+MRA_CW_GAP = 50                  # Gap between car top and CW box bottom
+MRA_CW_WALL_GAP = 100             # Rear wall to CW box top (not part of bracket depth)
 
-# MRA Green U-Frame (counterweight bracket visual)
-MRA_CW_FRAME_WIDTH = 1100         # Green frame width
-MRA_CW_FRAME_DEPTH = 400          # Green frame depth (matches MRA_CW_BRACKET_DEPTH)
-MRA_CW_FRAME_THICKNESS = 40       # Green frame bar thickness
+# MRA CW Box (white box; its depth comes from mra_cw_bracket_depth)
+MRA_CW_BOX_WIDTH = 1100           # CW box width
 
-# MRA Yellow Box (counterweight inside green frame)
-MRA_CW_BOX_WIDTH = 900            # Yellow box width
-MRA_CW_BOX_DEPTH = 250            # Yellow box depth
+# MRA CW Wall Brackets (black inverted-L brackets hanging from the rear wall,
+# one on each side of the CW box, ending flush with the box bottom)
+MRA_CW_BRACKET_COLUMN_WIDTH = 75     # Descending column width
+MRA_CW_BRACKET_ARM_LENGTH = 175      # Arm length along the wall (includes column width)
+MRA_CW_BRACKET_ARM_THICKNESS = 75    # Arm thickness (depth from wall)
+MRA_CW_BRACKET_CLEARANCE = 140       # Horizontal clearance between box edge and column
+MRA_CW_BRACKET_COLOR = "#000000"     # Solid black fill
 
 # MRA Blue Box (car brackets on left/right sides)
 MRA_CAR_BRACKET_BOX_WIDTH = 200   # Blue box width

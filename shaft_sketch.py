@@ -85,6 +85,7 @@ class LiftConfig:
     mra_car_bracket_width: float = field(default_factory=lambda: config.MRA_CAR_BRACKET_WIDTH)
     mra_car_bracket_width_right: Optional[float] = None  # None = same as left
     mra_cw_bracket_depth: float = field(default_factory=lambda: config.MRA_CW_BRACKET_DEPTH)
+    mra_cw_wall_gap: float = field(default_factory=lambda: config.MRA_CW_WALL_GAP)
 
     # Shaft dimension overrides (user-specified explicit shaft dimensions)
     shaft_width_override: Optional[float] = None
@@ -164,7 +165,8 @@ class LiftConfig:
             return door_zone + self.finished_car_depth + door_zone
         if self.lift_machine_type == "mra":
             return (2 * self.door_panel_thickness + config.DEFAULT_DOOR_GAP
-                    + self.unfinished_car_depth + config.MRA_CW_GAP + self.mra_cw_bracket_depth)
+                    + self.unfinished_car_depth + config.MRA_CW_GAP
+                    + self.mra_cw_bracket_depth + self.mra_cw_wall_gap)
         else:
             return (self.unfinished_car_depth + 2 * self.door_panel_thickness
                     + config.DEFAULT_DOOR_GAP + config.DEFAULT_REAR_CLEARANCE)
@@ -235,7 +237,8 @@ class LiftConfig:
                     f"Gap ({int(config.DEFAULT_DOOR_GAP)}) + "
                     f"Unfinished Car ({int(self.unfinished_car_depth)}) + "
                     f"CW Gap ({int(config.MRA_CW_GAP)}) + "
-                    f"CW Bracket ({int(self.mra_cw_bracket_depth)})")
+                    f"CW Bracket ({int(self.mra_cw_bracket_depth)}) + "
+                    f"CW Wall Gap ({int(self.mra_cw_wall_gap)})")
         else:
             return (f"Unfinished Car ({int(self.unfinished_car_depth)}) + "
                     f"2 x Door ({int(self.door_panel_thickness)}) + "
@@ -281,12 +284,8 @@ class LiftConfig:
             if self.telescopic_right_ext is None:
                 self.telescopic_right_ext = config.TELESCOPIC_RIGHT_EXTENSION
 
-        # Validate door width fits structural opening
-        if self.door_width > self.structural_opening_width:
-            errors.append(
-                f"Door Width ({int(self.door_width)}mm) exceeds "
-                f"Structural Opening Width ({int(self.structural_opening_width)}mm)."
-            )
+        # NOTE: door_width > structural_opening_width is intentionally NOT a hard
+        # error — the door simply overlaps the wall, which is still drawable.
 
         if errors:
             raise ValueError(" | ".join(errors))
@@ -1125,6 +1124,7 @@ class LiftShaftSketch:
                     shaft_width=shaft_width,
                     shaft_depth=sd,
                     cw_bracket_depth=cw_bracket_depth,
+                    wall_gap=lift_config.mra_cw_wall_gap,
                 )
 
                 # Draw car brackets on both left and right sides (at car center height)
@@ -2655,6 +2655,7 @@ class LiftShaftSketch:
                     shaft_width=shaft_width,
                     shaft_depth=sd,
                     cw_bracket_depth=cw_bracket_depth,
+                    wall_gap=lift_config.mra_cw_wall_gap,
                     mirrored=True,
                 )
 

@@ -1458,18 +1458,19 @@ def draw_counterweight_bracket_top(
     shaft_width: float,
     shaft_depth: float,
     cw_bracket_depth: float,
+    wall_gap: float = None,
     mirrored: bool = False,
 ) -> None:
     """
     Draw the counterweight bracket at the TOP of shaft (for MRA configuration).
 
-    The CW bracket spans the full shaft width at the rear (top in plan view).
-    Contains a green U-frame with yellow inner CW box centered within.
-
-    Layout:
-    - Green frame depth: MRA_CW_BRACKET_BOX_DEPTH (625mm)
-    - Inner yellow box depth: MRA_CW_BOX_DEPTH (300mm)
-    - Green frame bottom edge touches car top edge
+    Layout (plan view, rear wall at top):
+    - White CW box centered horizontally; its top edge sits wall_gap below the
+      rear wall and its depth equals cw_bracket_depth.
+    - Two black inverted-L wall brackets hang from the rear wall on either side
+      of the box: arms run along the wall pointing outward, columns descend
+      beside the box, ending flush with the box bottom.
+    - The space below the box (down to the car top) is the CW gap.
 
     Args:
         ax: Matplotlib axes
@@ -1477,149 +1478,69 @@ def draw_counterweight_bracket_top(
         shaft_y: Bottom y coordinate of shaft interior
         shaft_width: Width of shaft interior
         shaft_depth: Depth of shaft interior
-        cw_bracket_depth: Depth of CW bracket area at top
-        mirrored: If True, draw at bottom of shaft instead of top (for facing banks Bank 2)
+        cw_bracket_depth: Depth (height in plan view) of the CW box
+        wall_gap: Gap between rear wall and CW box top (excluded from bracket depth)
+        mirrored: If True, draw at bottom of shaft instead of top (facing banks Bank 2)
     """
-    # CW bracket area position
-    bracket_x = shaft_x
-    if mirrored:
-        # Mirrored: CW bracket at bottom of shaft
-        bracket_y = shaft_y
-    else:
-        # Normal: CW bracket at top/rear of shaft
-        bracket_y = shaft_y + shaft_depth - cw_bracket_depth
-    bracket_width = shaft_width
+    if wall_gap is None:
+        wall_gap = config.MRA_CW_WALL_GAP
 
-    # Use MRA CW dimensions (all independently configurable)
-    # Green U-frame
-    frame_width = config.MRA_CW_FRAME_WIDTH
-    frame_depth = config.MRA_CW_FRAME_DEPTH
-    frame_thickness = config.MRA_CW_FRAME_THICKNESS
-    # Yellow box
-    inner_box_width = config.MRA_CW_BOX_WIDTH
-    inner_box_depth = config.MRA_CW_BOX_DEPTH
+    box_width = config.MRA_CW_BOX_WIDTH
+    column_width = config.MRA_CW_BRACKET_COLUMN_WIDTH
+    arm_length = config.MRA_CW_BRACKET_ARM_LENGTH
+    arm_thickness = config.MRA_CW_BRACKET_ARM_THICKNESS
+    clearance = config.MRA_CW_BRACKET_CLEARANCE
 
-    # Green U-frame positioning - extends to touch the wall
-    frame_visible_depth = cw_bracket_depth  # Use actual bracket depth to reach wall
-    box_x = bracket_x + (bracket_width - frame_width) / 2  # Centered horizontally
-    box_y = bracket_y  # Bottom edge touches car top
-    box_width = frame_width  # For drawing the green frame
-
-    edge_color = config.BRACKET_EDGE_COLOR
-    edge_width = config.BRACKET_EDGE_WIDTH
-    frame_color = config.CW_FRAME_COLOR
-    frame_fill_style = dict(
-        facecolor=frame_color,
-        edgecolor="none",
-        zorder=2,
-    )
-    outline_style = dict(
-        facecolor="none",
-        edgecolor=edge_color,
-        linewidth=edge_width,
-        zorder=3,
-        joinstyle="miter",
-        capstyle="butt",
-    )
+    # Brackets span from the wall to the box bottom (flush)
+    bracket_extent = wall_gap + cw_bracket_depth
 
     if mirrored:
-        # Simple frame: fill bars + two rectangle outlines (outer + offset inner).
-        ax.add_patch(Rectangle(
-            (box_x, box_y + frame_visible_depth - frame_thickness),
-            box_width,
-            frame_thickness,
-            **frame_fill_style,
-        ))
-        ax.add_patch(Rectangle(
-            (box_x, box_y),
-            frame_thickness,
-            frame_visible_depth,
-            **frame_fill_style,
-        ))
-        ax.add_patch(Rectangle(
-            (box_x + box_width - frame_thickness, box_y),
-            frame_thickness,
-            frame_visible_depth,
-            **frame_fill_style,
-        ))
-
-        # Outer rectangle
-        ax.add_patch(Rectangle(
-            (box_x, box_y),
-            box_width,
-            frame_visible_depth,
-            **outline_style,
-        ))
-        # Inner rectangle: shifted right by thickness; reduced width/depth
-        ax.add_patch(Rectangle(
-            (box_x + frame_thickness, box_y),
-            box_width - 2 * frame_thickness,
-            frame_visible_depth - frame_thickness,
-            **outline_style,
-        ))
-
-        # Draw inner CW box (yellow) - positioned relative to top bar
-        inner_area_width = box_width - 2 * frame_thickness
-        inner_area_depth = frame_visible_depth - frame_thickness
-        cw_width = inner_box_width
-        cw_depth = inner_box_depth
-        cw_x = box_x + frame_thickness + (inner_area_width - cw_width) / 2
-        cw_y = box_y + (inner_area_depth - cw_depth) / 2  # Offset from bottom (open side)
-
+        # Mirrored: rear wall at bottom of shaft, interior extends upward
+        wall_inner_y = shaft_y
+        direction = 1.0
     else:
-        # Simple frame: fill bars + two rectangle outlines (outer + offset inner).
-        ax.add_patch(Rectangle(
-            (box_x, box_y),
-            box_width,
-            frame_thickness,
-            **frame_fill_style,
-        ))
-        ax.add_patch(Rectangle(
-            (box_x, box_y),
-            frame_thickness,
-            frame_visible_depth,
-            **frame_fill_style,
-        ))
-        ax.add_patch(Rectangle(
-            (box_x + box_width - frame_thickness, box_y),
-            frame_thickness,
-            frame_visible_depth,
-            **frame_fill_style,
-        ))
+        # Normal: rear wall at top of shaft, interior extends downward
+        wall_inner_y = shaft_y + shaft_depth
+        direction = -1.0
 
-        # Outer rectangle
-        ax.add_patch(Rectangle(
-            (box_x, box_y),
-            box_width,
-            frame_visible_depth,
-            **outline_style,
-        ))
-        # Inner rectangle: shifted right+up by thickness; reduced width/depth
-        ax.add_patch(Rectangle(
-            (box_x + frame_thickness, box_y + frame_thickness),
-            box_width - 2 * frame_thickness,
-            frame_visible_depth - frame_thickness,
-            **outline_style,
-        ))
+    center_x = shaft_x + shaft_width / 2
 
-        # Draw inner CW box (yellow) - centered within the green frame
-        inner_area_width = box_width - 2 * frame_thickness
-        inner_area_depth = frame_visible_depth - frame_thickness
-        cw_width = inner_box_width
-        cw_depth = inner_box_depth
-        cw_x = box_x + frame_thickness + (inner_area_width - cw_width) / 2
-        cw_y = box_y + frame_thickness + (inner_area_depth - cw_depth) / 2
-
-    counterweight = Rectangle(
-        (cw_x, cw_y),
-        cw_width,
-        cw_depth,
+    # White CW box
+    box_x = center_x - box_width / 2
+    box_near_y = wall_inner_y + direction * wall_gap
+    box_far_y = wall_inner_y + direction * bracket_extent
+    ax.add_patch(Rectangle(
+        (box_x, min(box_near_y, box_far_y)),
+        box_width,
+        cw_bracket_depth,
         facecolor=config.CW_BOX_COLOR,
         edgecolor=config.BRACKET_EDGE_COLOR,
         linewidth=config.BRACKET_EDGE_WIDTH,
         zorder=3,
-    )
-    ax.add_patch(counterweight)
+    ))
+
+    # Black inverted-L wall brackets (side = -1 left, +1 right)
+    arm_under_y = wall_inner_y + direction * arm_thickness
+    column_end_y = wall_inner_y + direction * bracket_extent
+    for side in (-1.0, 1.0):
+        column_inner_x = center_x + side * (box_width / 2 + clearance)
+        column_outer_x = column_inner_x + side * column_width
+        arm_outer_x = column_inner_x + side * arm_length
+        ax.add_patch(Polygon(
+            [
+                (column_inner_x, wall_inner_y),
+                (arm_outer_x, wall_inner_y),
+                (arm_outer_x, arm_under_y),
+                (column_outer_x, arm_under_y),
+                (column_outer_x, column_end_y),
+                (column_inner_x, column_end_y),
+            ],
+            closed=True,
+            facecolor=config.MRA_CW_BRACKET_COLOR,
+            edgecolor=config.BRACKET_EDGE_COLOR,
+            linewidth=config.BRACKET_EDGE_WIDTH,
+            zorder=3,
+        ))
 
 
 def draw_car_bracket_cw_side(

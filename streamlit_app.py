@@ -447,18 +447,19 @@ section[data-testid="stSidebar"] [data-testid="stDivider"] {
 
 CAR_WALL_THICKNESS = config.DEFAULT_CAR_WALL_THICKNESS            # 25
 DOOR_GAP = config.DEFAULT_DOOR_GAP                                # 30
-REAR_CLEARANCE = config.DEFAULT_REAR_CLEARANCE                    # 345
+REAR_CLEARANCE = config.DEFAULT_REAR_CLEARANCE                    # 200
 DEFAULT_DOOR_EXTENSION = config.DEFAULT_DOOR_EXTENSION            # 100
 FIRE_DOOR_WIDTH = config.FIRE_LIFT_DOOR_WIDTH                     # 1200
 FIRE_MIN_SHAFT_WIDTH = config.FIRE_LIFT_MIN_SHAFT_WIDTH           # 2700
 FIRE_MIN_SHAFT_WIDTH_TELESCOPIC = config.FIRE_LIFT_MIN_SHAFT_WIDTH_TELESCOPIC  # 2550
-TELESCOPIC_LEFT_EXT_EXTRA = config.TELESCOPIC_LEFT_EXTENSION_EXTRA   # 50
-TELESCOPIC_RIGHT_EXT = config.TELESCOPIC_RIGHT_EXTENSION             # 150
+TELESCOPIC_LEFT_EXT_EXTRA = config.TELESCOPIC_LEFT_EXTENSION_EXTRA   # 100
+TELESCOPIC_RIGHT_EXT = config.TELESCOPIC_RIGHT_EXTENSION             # 200
 MRL_CW_BRACKET_MIN = config.DEFAULT_COUNTERWEIGHT_BRACKET_WIDTH      # 625
 MRL_CAR_BRACKET_MIN = config.DEFAULT_CAR_BRACKET_WIDTH               # 375
 MRA_CAR_BRACKET_MIN = config.MRA_CAR_BRACKET_WIDTH                   # 325
 MRA_CW_BRACKET_DEPTH_MIN = config.MRA_CW_BRACKET_DEPTH               # 400
 MRA_CW_GAP_MIN = config.MRA_CW_GAP                                   # 100
+MRA_CW_WALL_GAP_MIN = config.MRA_CW_WALL_GAP                         # 100
 PANEL_THICKNESS_DEFAULT = config.DEFAULT_LIFT_DOOR_THICKNESS         # 150
 
 
@@ -477,13 +478,15 @@ def make_default_lift(lift_type: str = "passenger", machine_type: str = "mrl") -
     uc_d = car_d + CAR_WALL_THICKNESS
 
     cw_bracket = car_bracket = None
-    mra_left = mra_right = mra_cw_depth = mra_cw_gap = None
+    mra_left = mra_right = mra_cw_depth = mra_cw_gap = mra_cw_wall_gap = None
 
     if machine_type == "mra":
         shaft_w = uc_w + 2 * MRA_CAR_BRACKET_MIN
-        shaft_d = 2 * PANEL_THICKNESS_DEFAULT + DOOR_GAP + uc_d + MRA_CW_GAP_MIN + MRA_CW_BRACKET_DEPTH_MIN
+        shaft_d = (2 * PANEL_THICKNESS_DEFAULT + DOOR_GAP + uc_d + MRA_CW_GAP_MIN
+                   + MRA_CW_BRACKET_DEPTH_MIN + MRA_CW_WALL_GAP_MIN)
         mra_cw_depth = MRA_CW_BRACKET_DEPTH_MIN
         mra_cw_gap = MRA_CW_GAP_MIN
+        mra_cw_wall_gap = MRA_CW_WALL_GAP_MIN
     else:
         shaft_w = MRL_CW_BRACKET_MIN + uc_w + MRL_CAR_BRACKET_MIN
         shaft_d = 2 * PANEL_THICKNESS_DEFAULT + DOOR_GAP + uc_d + REAR_CLEARANCE
@@ -529,6 +532,7 @@ def make_default_lift(lift_type: str = "passenger", machine_type: str = "mrl") -
         "mra_right_bracket": mra_right,
         "mra_cw_bracket_depth": mra_cw_depth,
         "mra_cw_gap": mra_cw_gap,
+        "mra_cw_wall_gap": mra_cw_wall_gap,
         "double_entrance": False,
         "door_offset_mm": 0,
         "door_offset_direction": "right",
@@ -563,27 +567,6 @@ def compute_min_shaft_width(lift: dict, machine_type: str) -> int:
                     else FIRE_MIN_SHAFT_WIDTH)
         min_w = max(min_w, fire_min)
     return int(min_w)
-
-
-def validate_lift(lift: dict, machine_type: str) -> list:
-    """Port of validateLift() — the only two blocking checks in KARR AI."""
-    errors = []
-    min_w = compute_min_shaft_width(lift, machine_type)
-
-    if lift["door_width"] > lift["structural_opening_width"]:
-        errors.append(
-            f"Door Width ({lift['door_width']}mm) exceeds Structural Opening "
-            f"({lift['structural_opening_width']}mm)"
-        )
-
-    if (lift.get("door_opening_type") == "centre"
-            and lift.get("door_panel_length")
-            and lift["door_panel_length"] > max(lift["shaft_width"], min_w)):
-        errors.append(
-            f"Door Panel Length ({lift['door_panel_length']}mm) exceeds shaft width"
-        )
-
-    return errors
 
 
 # Min/max bounds for the bounded numeric widgets. Used to clamp values that
@@ -771,8 +754,9 @@ def render_lift_config_form(
         if machine_type == "mra" and not data["double_entrance"]:
             uc_d = data["depth"] + CAR_WALL_THICKNESS
             fixed_depth = 2 * (data["door_panel_thickness"] or PANEL_THICKNESS_DEFAULT) + DOOR_GAP + uc_d
-            old_avail_d = data["shaft_depth"] - fixed_depth
-            new_avail_d = new_sd - fixed_depth
+            wall_gap = data["mra_cw_wall_gap"] if data["mra_cw_wall_gap"] is not None else MRA_CW_WALL_GAP_MIN
+            old_avail_d = data["shaft_depth"] - fixed_depth - wall_gap
+            new_avail_d = new_sd - fixed_depth - wall_gap
             old_cwd = data["mra_cw_bracket_depth"] if data["mra_cw_bracket_depth"] is not None else MRA_CW_BRACKET_DEPTH_MIN
             half = (new_avail_d - old_avail_d) // 2
             new_cwd = old_cwd + half
@@ -804,7 +788,8 @@ def render_lift_config_form(
         data = st.session_state[data_key]
         uc_d = data["depth"] + CAR_WALL_THICKNESS
         fixed = 2 * (data["door_panel_thickness"] or PANEL_THICKNESS_DEFAULT) + DOOR_GAP + uc_d
-        return data["shaft_depth"] - fixed
+        wall_gap = data["mra_cw_wall_gap"] if data["mra_cw_wall_gap"] is not None else MRA_CW_WALL_GAP_MIN
+        return data["shaft_depth"] - fixed - wall_gap
 
     def _cb_mra_cwd():
         v = max(0, st.session_state[f"{prefix}_w_mra_cw_bracket_depth"])
@@ -813,6 +798,15 @@ def render_lift_config_form(
     def _cb_mra_gap():
         v = max(0, st.session_state[f"{prefix}_w_mra_cw_gap"])
         _apply({"mra_cw_gap": v, "mra_cw_bracket_depth": _avail_d() - v})
+
+    def _cb_mra_wall_gap():
+        data = st.session_state[data_key]
+        v = max(0, st.session_state[f"{prefix}_w_mra_cw_wall_gap"])
+        uc_d = data["depth"] + CAR_WALL_THICKNESS
+        fixed = 2 * (data["door_panel_thickness"] or PANEL_THICKNESS_DEFAULT) + DOOR_GAP + uc_d
+        new_avail_d = data["shaft_depth"] - fixed - v
+        cwd = data["mra_cw_bracket_depth"] if data["mra_cw_bracket_depth"] is not None else MRA_CW_BRACKET_DEPTH_MIN
+        _apply({"mra_cw_wall_gap": v, "mra_cw_gap": max(0, new_avail_d - cwd)})
 
     def _cb_double():
         data = st.session_state[data_key]
@@ -830,7 +824,9 @@ def render_lift_config_form(
         else:
             uc_d = data["depth"] + CAR_WALL_THICKNESS
             if machine_type == "mra":
-                upd["shaft_depth"] = 2 * PANEL_THICKNESS_DEFAULT + DOOR_GAP + uc_d + MRA_CW_GAP_MIN + MRA_CW_BRACKET_DEPTH_MIN
+                wall_gap = data["mra_cw_wall_gap"] if data["mra_cw_wall_gap"] is not None else MRA_CW_WALL_GAP_MIN
+                upd["shaft_depth"] = (2 * PANEL_THICKNESS_DEFAULT + DOOR_GAP + uc_d
+                                      + MRA_CW_GAP_MIN + MRA_CW_BRACKET_DEPTH_MIN + wall_gap)
             else:
                 upd["shaft_depth"] = 2 * PANEL_THICKNESS_DEFAULT + DOOR_GAP + uc_d + REAR_CLEARANCE
         _apply(upd)
@@ -917,13 +913,8 @@ def render_lift_config_form(
     # ── Render ──
     is_fire = L["type"] == "fire"
     title = f"Lift {lift_index + 1} · {'Fire/Service' if is_fire else 'Passenger'}"
-    errors = validate_lift(L, machine_type)
-    if errors:
-        title = "⚠ " + title
 
     with st.expander(title, expanded=(lift_index == 0)):
-        if errors:
-            st.error(" | ".join(errors))
 
         # Lift Type
         tkey = f"{prefix}_w_type"
@@ -1013,6 +1004,10 @@ def render_lift_config_form(
                 _num("mra_cw_gap", "CW Gap (mm)", step=25,
                      on_change=_cb_mra_gap,
                      seed=L["mra_cw_gap"] if L["mra_cw_gap"] is not None else MRA_CW_GAP_MIN)
+            _num("mra_cw_wall_gap", "CW Wall Gap (mm)", step=25,
+                 on_change=_cb_mra_wall_gap,
+                 help="Space between rear wall and CW box. CW gap auto-adjusts.",
+                 seed=L["mra_cw_wall_gap"] if L["mra_cw_wall_gap"] is not None else MRA_CW_WALL_GAP_MIN)
 
         # Door Settings
         st.markdown("**Door Settings**")
@@ -1140,6 +1135,8 @@ def build_lift_config(lift_data: dict, machine_type: str, wall_thickness: float)
             kwargs["mra_car_bracket_width_right"] = lift_data["mra_right_bracket"]
         if lift_data.get("mra_cw_bracket_depth") is not None:
             kwargs["mra_cw_bracket_depth"] = lift_data["mra_cw_bracket_depth"]
+        if lift_data.get("mra_cw_wall_gap") is not None:
+            kwargs["mra_cw_wall_gap"] = lift_data["mra_cw_wall_gap"]
 
     if lift_data.get("double_entrance"):
         kwargs["double_entrance"] = True
@@ -1651,13 +1648,7 @@ def main():
 
             generate_btn = st.button("Generate Sketch", type="primary", width="stretch", key="plan_generate")
 
-            # KARR AI blocks only on the two validateLift() checks.
-            all_lifts = bank1_lifts + bank2_lifts
-            any_errors = any(validate_lift(ld, machine_type) for ld in all_lifts)
-
-            if generate_btn and any_errors:
-                st.error("Fix dimension errors before generating.")
-            elif generate_btn:
+            if generate_btn:
                 try:
                     # Build LiftConfig objects for Bank 1
                     lift_configs = [build_lift_config(ld, machine_type, wall_thickness) for ld in bank1_lifts]
