@@ -171,9 +171,11 @@ LIFT_DOOR_FRAME_MARGIN = 37.5       # Distance from top/bottom edges to frame li
 LIFT_DOOR_PANEL_HEIGHT = 75         # Height of inner door panels (mm)
 LIFT_DOOR_PANEL_EDGE_WIDTH = 1.5    # Thicker border for inner panels
 LIFT_DOOR_FRAME_LINE_WIDTH = 0.8    # Width for horizontal frame lines
-# Telescopic doors: the inner rectangle is staggered (near-wall door -> left, deeper -> right)
-# and overlaps the centre by this fraction of door_width on each side. Union of the two = door_width.
+# Telescopic doors: each band shows two staggered panels (one per row) that
+# overlap the centre by this fraction of door_width on each side. Union = door_width.
 TELESCOPIC_INNER_OVERLAP_RATIO = 0.05
+TELESCOPIC_PANEL_ROW_HEIGHT = 52.5  # Height of each staggered telescopic panel (mm)
+TELESCOPIC_PANEL_ROW_GAP = 8        # Vertical gap between the two panel rows (mm)
 
 # Door jamb styling
 DOOR_JAMB_WIDTH = 75                # Horizontal dimension (mm)

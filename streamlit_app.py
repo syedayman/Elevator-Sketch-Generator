@@ -480,7 +480,10 @@ def make_default_lift(lift_type: str = "passenger", machine_type: str = "mrl") -
     cw_bracket = car_bracket = None
     mra_left = mra_right = mra_cw_depth = mra_cw_gap = mra_cw_wall_gap = None
 
-    if machine_type == "mra":
+    # MRA fire lifts use MRL-style side brackets (CW left, car right)
+    mra_rear_cw = machine_type == "mra" and not is_fire
+
+    if mra_rear_cw:
         shaft_w = uc_w + 2 * MRA_CAR_BRACKET_MIN
         shaft_d = (2 * PANEL_THICKNESS_DEFAULT + DOOR_GAP + uc_d + MRA_CW_GAP_MIN
                    + MRA_CW_BRACKET_DEPTH_MIN + MRA_CW_WALL_GAP_MIN)
@@ -493,10 +496,12 @@ def make_default_lift(lift_type: str = "passenger", machine_type: str = "mrl") -
         cw_bracket = MRL_CW_BRACKET_MIN
         car_bracket = MRL_CAR_BRACKET_MIN
 
+    # Seed fire shafts at the DBC minimum width (default only — users can edit
+    # freely below it; nothing validates or blocks)
     if is_fire:
         shaft_w = max(shaft_w, FIRE_MIN_SHAFT_WIDTH)
 
-    if machine_type == "mra":
+    if mra_rear_cw:
         avail_w = shaft_w - uc_w
         extra = max(0, avail_w - 2 * MRA_CAR_BRACKET_MIN)
         mra_left = MRA_CAR_BRACKET_MIN + extra // 2
@@ -507,7 +512,17 @@ def make_default_lift(lift_type: str = "passenger", machine_type: str = "mrl") -
         cw_bracket = MRL_CW_BRACKET_MIN + extra // 2
         car_bracket = avail_w - cw_bracket
 
-    panel_len = 2400 if is_fire else min(2 * door_w + 2 * DEFAULT_DOOR_EXTENSION, shaft_w)
+    # Fire lifts default to telescopic door opening (panel length unused there;
+    # switching to centre recomputes it — see _cb_door_opening_type)
+    if is_fire:
+        door_type = "telescopic"
+        tele_left = int(0.5 * door_w) + TELESCOPIC_LEFT_EXT_EXTRA
+        tele_right = TELESCOPIC_RIGHT_EXT
+        panel_len = None
+    else:
+        door_type = "centre"
+        tele_left = tele_right = None
+        panel_len = min(2 * door_w + 2 * DEFAULT_DOOR_EXTENSION, shaft_w)
 
     return {
         "type": lift_type,
@@ -523,9 +538,9 @@ def make_default_lift(lift_type: str = "passenger", machine_type: str = "mrl") -
         "door_panel_thickness": PANEL_THICKNESS_DEFAULT,
         "structural_opening_width": 1300,
         "structural_opening_height": 2200,
-        "door_opening_type": "centre",
-        "telescopic_left_ext": None,
-        "telescopic_right_ext": None,
+        "door_opening_type": door_type,
+        "telescopic_left_ext": tele_left,
+        "telescopic_right_ext": tele_right,
         "cw_bracket_width": cw_bracket,
         "car_bracket_width": car_bracket,
         "mra_left_bracket": mra_left,
@@ -557,9 +572,10 @@ def make_default_section() -> dict:
 def compute_min_shaft_width(lift: dict, machine_type: str) -> int:
     """Port of computeMinShaftWidth()."""
     uc_w = lift["width"] + 2 * CAR_WALL_THICKNESS
-    if machine_type == "mra" and not lift.get("double_entrance"):
+    if machine_type == "mra" and not lift.get("double_entrance") and lift["type"] != "fire":
         min_w = MRA_CAR_BRACKET_MIN + uc_w + MRA_CAR_BRACKET_MIN
     else:
+        # MRL, or MRA with MRL-style side brackets (double entrance / fire)
         min_w = MRL_CW_BRACKET_MIN + uc_w + MRL_CAR_BRACKET_MIN
     if lift["type"] == "fire":
         fire_min = (FIRE_MIN_SHAFT_WIDTH_TELESCOPIC
@@ -698,7 +714,7 @@ def render_lift_config_form(
         w, d = (int(x) for x in st.session_state[f"{prefix}_w_cabin"].split("x"))
         new_avail = data["shaft_width"] - (w + 2 * CAR_WALL_THICKNESS)
         upd = {"width": w, "depth": d}
-        if machine_type == "mrl" or data["double_entrance"]:
+        if machine_type == "mrl" or data["double_entrance"] or data["type"] == "fire":
             extra = max(0, new_avail - MRL_CW_BRACKET_MIN - MRL_CAR_BRACKET_MIN)
             cw = MRL_CW_BRACKET_MIN + extra // 2
             upd["cw_bracket_width"] = cw
@@ -735,7 +751,7 @@ def render_lift_config_form(
         new_avail = new_sw - uc_w
         half = (new_avail - old_avail) // 2
         upd = {"shaft_width": new_sw}
-        if machine_type == "mrl" or data["double_entrance"]:
+        if machine_type == "mrl" or data["double_entrance"] or data["type"] == "fire":
             old_cw = data["cw_bracket_width"] if data["cw_bracket_width"] is not None else MRL_CW_BRACKET_MIN
             new_cw = old_cw + half
             upd["cw_bracket_width"] = max(0, new_cw)
@@ -751,7 +767,7 @@ def render_lift_config_form(
         data = st.session_state[data_key]
         new_sd = st.session_state[f"{prefix}_w_shaft_depth"]
         upd = {"shaft_depth": new_sd}
-        if machine_type == "mra" and not data["double_entrance"]:
+        if machine_type == "mra" and not data["double_entrance"] and data["type"] != "fire":
             uc_d = data["depth"] + CAR_WALL_THICKNESS
             fixed_depth = 2 * (data["door_panel_thickness"] or PANEL_THICKNESS_DEFAULT) + DOOR_GAP + uc_d
             wall_gap = data["mra_cw_wall_gap"] if data["mra_cw_wall_gap"] is not None else MRA_CW_WALL_GAP_MIN
@@ -809,26 +825,17 @@ def render_lift_config_form(
         _apply({"mra_cw_wall_gap": v, "mra_cw_gap": max(0, new_avail_d - cwd)})
 
     def _cb_double():
+        # Double entrance is fire-only; fire lifts use MRL-style side brackets in
+        # both MRL and MRA, so only the shaft depth changes with the toggle.
         data = st.session_state[data_key]
         on = st.session_state[f"{prefix}_w_double_entrance"]
         upd = {"double_entrance": on}
         if on:
             door_zone = 2 * (data["door_panel_thickness"] or PANEL_THICKNESS_DEFAULT) + DOOR_GAP
             upd["shaft_depth"] = door_zone + data["depth"] + door_zone
-            if machine_type == "mra":
-                new_avail = data["shaft_width"] - (data["width"] + 2 * CAR_WALL_THICKNESS)
-                extra = max(0, new_avail - MRL_CW_BRACKET_MIN - MRL_CAR_BRACKET_MIN)
-                cw = MRL_CW_BRACKET_MIN + extra // 2
-                upd["cw_bracket_width"] = cw
-                upd["car_bracket_width"] = new_avail - cw
         else:
             uc_d = data["depth"] + CAR_WALL_THICKNESS
-            if machine_type == "mra":
-                wall_gap = data["mra_cw_wall_gap"] if data["mra_cw_wall_gap"] is not None else MRA_CW_WALL_GAP_MIN
-                upd["shaft_depth"] = (2 * PANEL_THICKNESS_DEFAULT + DOOR_GAP + uc_d
-                                      + MRA_CW_GAP_MIN + MRA_CW_BRACKET_DEPTH_MIN + wall_gap)
-            else:
-                upd["shaft_depth"] = 2 * PANEL_THICKNESS_DEFAULT + DOOR_GAP + uc_d + REAR_CLEARANCE
+            upd["shaft_depth"] = 2 * PANEL_THICKNESS_DEFAULT + DOOR_GAP + uc_d + REAR_CLEARANCE
         _apply(upd)
 
     def _cb_door_width():
@@ -973,7 +980,7 @@ def render_lift_config_form(
 
         # Bracket Spaces — always editable, zero-sum, max(0, .) only
         st.markdown("**Bracket Spaces**")
-        if machine_type == "mrl" or L["double_entrance"]:
+        if machine_type == "mrl" or L["double_entrance"] or L["type"] == "fire":
             bc1, bc2 = st.columns(2)
             with bc1:
                 _num("cw_bracket_width", "CW Bracket Width (mm)", step=25,
@@ -1123,7 +1130,8 @@ def build_lift_config(lift_data: dict, machine_type: str, wall_thickness: float)
         kwargs["lift_capacity"] = lift_data["capacity"]
 
     is_double_entrance = lift_data.get("double_entrance", False)
-    if machine_type == "mrl" or (machine_type == "mra" and is_double_entrance):
+    is_fire = lift_data.get("type") == "fire"
+    if machine_type == "mrl" or (machine_type == "mra" and (is_double_entrance or is_fire)):
         if lift_data.get("cw_bracket_width") is not None:
             kwargs["counterweight_bracket_width"] = lift_data["cw_bracket_width"]
         if lift_data.get("car_bracket_width") is not None:

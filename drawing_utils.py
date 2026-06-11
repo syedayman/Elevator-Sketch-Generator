@@ -1069,6 +1069,39 @@ def _draw_door_inner_details(
         door_opening_center_x: Center x of actual door opening (for telescopic doors
             where rect center differs from opening center). If None, uses rect center.
     """
+    door_center_x = door_opening_center_x if door_opening_center_x is not None else door_rect_left + door_rect_width / 2
+
+    panel_props = dict(
+        facecolor="none",
+        edgecolor=config.LIFT_DOOR_EDGE_COLOR,
+        linewidth=config.LIFT_DOOR_PANEL_EDGE_WIDTH,
+        zorder=8,
+    )
+
+    if telescopic_side in ("left", "right"):
+        # Telescopic: two bold panels staggered within the band — one row above
+        # the band centerline, one below — overlapping at the centre by p on each
+        # side so their union spans exactly door_width. telescopic_side picks
+        # which panel rides the upper row, so the landing and car bands mirror
+        # each other. No thin frame lines for telescopic bands.
+        half = door_width / 2
+        p = config.TELESCOPIC_INNER_OVERLAP_RATIO * door_width
+        row_height = config.TELESCOPIC_PANEL_ROW_HEIGHT
+        row_gap = config.TELESCOPIC_PANEL_ROW_GAP
+        upper_y = door_y + door_thickness / 2 + row_gap / 2
+        lower_y = door_y + door_thickness / 2 - row_gap / 2 - row_height
+        left_span = (door_center_x - half, door_center_x + p)
+        right_span = (door_center_x - p, door_center_x + half)
+        if telescopic_side == "left":
+            upper_span, lower_span = left_span, right_span
+        else:
+            upper_span, lower_span = right_span, left_span
+        ax.add_patch(Rectangle(
+            (upper_span[0], upper_y), upper_span[1] - upper_span[0], row_height, **panel_props))
+        ax.add_patch(Rectangle(
+            (lower_span[0], lower_y), lower_span[1] - lower_span[0], row_height, **panel_props))
+        return
+
     # Calculate frame line y positions (37.5mm from top/bottom)
     frame_margin = config.LIFT_DOOR_FRAME_MARGIN
     bottom_frame_y = door_y + frame_margin
@@ -1091,32 +1124,9 @@ def _draw_door_inner_details(
         **frame_line_props,
     )
 
-    # Calculate inner panel positions (centered horizontally, total width = door_width)
-    door_center_x = door_opening_center_x if door_opening_center_x is not None else door_rect_left + door_rect_width / 2
-    panel_height = config.LIFT_DOOR_PANEL_HEIGHT
-
     # Panel y position (centered vertically between frame lines)
+    panel_height = config.LIFT_DOOR_PANEL_HEIGHT
     panel_y = door_y + (door_thickness - panel_height) / 2
-
-    panel_props = dict(
-        facecolor="none",
-        edgecolor=config.LIFT_DOOR_EDGE_COLOR,
-        linewidth=config.LIFT_DOOR_PANEL_EDGE_WIDTH,
-        zorder=8,
-    )
-
-    if telescopic_side in ("left", "right"):
-        # Telescopic: a single bold rectangle staggered to one side. The two doors
-        # (near-wall -> left, deeper -> right) overlap at the centre by p on each
-        # side, so their union spans exactly door_width.
-        half = door_width / 2
-        p = config.TELESCOPIC_INNER_OVERLAP_RATIO * door_width
-        if telescopic_side == "left":
-            rx0, rx1 = door_center_x - half, door_center_x + p
-        else:
-            rx0, rx1 = door_center_x - p, door_center_x + half
-        ax.add_patch(Rectangle((rx0, panel_y), rx1 - rx0, panel_height, **panel_props))
-        return
 
     # Centre opening: two panels side by side, each half the door width
     panel_width = door_width / 2
