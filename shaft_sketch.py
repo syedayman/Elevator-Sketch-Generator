@@ -86,6 +86,16 @@ class LiftConfig:
     mra_car_bracket_width_right: Optional[float] = None  # None = same as left
     mra_cw_bracket_depth: float = field(default_factory=lambda: config.MRA_CW_BRACKET_DEPTH)
     mra_cw_wall_gap: float = field(default_factory=lambda: config.MRA_CW_WALL_GAP)
+    # Car guide rail widths (box + stem + bar; the stem flexes). The bracket
+    # width fields above are ZONE widths (pure bracket + rail) — callers compose.
+    rail_width_left: float = field(default_factory=lambda: config.DEFAULT_RAIL_WIDTH)
+    rail_width_right: float = field(default_factory=lambda: config.DEFAULT_RAIL_WIDTH)
+    # Running clearance between landing and car door
+    door_gap: float = field(default_factory=lambda: config.DEFAULT_DOOR_GAP)
+    # CW box visual dimensions (free inputs; boxes float inside their zones)
+    cw_box_width: float = field(default_factory=lambda: config.CW_BOX_WIDTH)
+    cw_box_depth: float = field(default_factory=lambda: config.CW_BOX_HEIGHT)
+    mra_cw_box_width: float = field(default_factory=lambda: config.MRA_CW_BOX_WIDTH)
 
     # Shaft dimension overrides (user-specified explicit shaft dimensions)
     shaft_width_override: Optional[float] = None
@@ -168,15 +178,15 @@ class LiftConfig:
         if self.double_entrance:
             # Double entrance: front door zone + finished car + rear door zone
             # No rear car wall — both sides are door openings
-            door_zone = 2 * self.door_panel_thickness + config.DEFAULT_DOOR_GAP
+            door_zone = 2 * self.door_panel_thickness + self.door_gap
             return door_zone + self.finished_car_depth + door_zone
         if self.mra_rear_cw:
-            return (2 * self.door_panel_thickness + config.DEFAULT_DOOR_GAP
+            return (2 * self.door_panel_thickness + self.door_gap
                     + self.unfinished_car_depth + config.MRA_CW_GAP
                     + self.mra_cw_bracket_depth + self.mra_cw_wall_gap)
         else:
             return (self.unfinished_car_depth + 2 * self.door_panel_thickness
-                    + config.DEFAULT_DOOR_GAP + config.DEFAULT_REAR_CLEARANCE)
+                    + self.door_gap + config.DEFAULT_REAR_CLEARANCE)
 
     @property
     def shaft_width(self) -> float:
@@ -235,13 +245,13 @@ class LiftConfig:
     def _depth_breakdown_str(self) -> str:
         """Return a human-readable breakdown of minimum shaft depth components."""
         if self.double_entrance:
-            dz = 2 * int(self.door_panel_thickness) + int(config.DEFAULT_DOOR_GAP)
+            dz = 2 * int(self.door_panel_thickness) + int(self.door_gap)
             return (f"Front Door Zone ({dz}) + "
                     f"Finished Car ({int(self.finished_car_depth)}) + "
                     f"Rear Door Zone ({dz})")
         if self.mra_rear_cw:
             return (f"2 x Door ({int(self.door_panel_thickness)}) + "
-                    f"Gap ({int(config.DEFAULT_DOOR_GAP)}) + "
+                    f"Gap ({int(self.door_gap)}) + "
                     f"Unfinished Car ({int(self.unfinished_car_depth)}) + "
                     f"CW Gap ({int(config.MRA_CW_GAP)}) + "
                     f"CW Bracket ({int(self.mra_cw_bracket_depth)}) + "
@@ -249,7 +259,7 @@ class LiftConfig:
         else:
             return (f"Unfinished Car ({int(self.unfinished_car_depth)}) + "
                     f"2 x Door ({int(self.door_panel_thickness)}) + "
-                    f"Gap ({int(config.DEFAULT_DOOR_GAP)}) + "
+                    f"Gap ({int(self.door_gap)}) + "
                     f"Rear Clearance ({int(config.DEFAULT_REAR_CLEARANCE)})")
 
     def __post_init__(self):
@@ -817,7 +827,7 @@ class LiftShaftSketch:
             # Horizontal centerline through car cabin center (front-fixed car)
             if self._use_enhanced_api and self.lifts:
                 lift = self.lifts[0]
-                door_zone = 2 * lift.door_panel_thickness + config.DEFAULT_DOOR_GAP
+                door_zone = 2 * lift.door_panel_thickness + lift.door_gap
                 center_y = wt + door_zone + lift.finished_car_depth / 2
             else:
                 center_y = wt + sd / 2
@@ -887,6 +897,7 @@ class LiftShaftSketch:
                 door_width=lift_config.door_width,
                 door_extension=lift_config.door_extension,
                 door_thickness=lift_config.door_panel_thickness,
+                door_gap=lift_config.door_gap,
                 door_opening_type=lift_config.door_opening_type,
                 telescopic_left_ext=lift_config.telescopic_left_ext,
                 telescopic_right_ext=lift_config.telescopic_right_ext,
@@ -902,6 +913,7 @@ class LiftShaftSketch:
                     door_width=lift_config.door_width,
                     door_extension=lift_config.door_extension,
                     door_thickness=lift_config.door_panel_thickness,
+                    door_gap=lift_config.door_gap,
                     mirrored=True,
                     door_opening_type=lift_config.door_opening_type,
                     telescopic_left_ext=lift_config.telescopic_left_ext,
@@ -915,17 +927,18 @@ class LiftShaftSketch:
 
             if not mirror:
                 # Normal: counterweight on left, align box to left edge
-                draw_counterweight_bracket(ax, shaft_x, bracket_y, cwb_width, bracket_height, align="left")
+                draw_counterweight_bracket(ax, shaft_x, bracket_y, cwb_width, bracket_height, align="left",
+                           box_width=lift_config.cw_box_width, box_depth=lift_config.cw_box_depth)
             else:
                 # Mirrored: counterweight on right, align box to right edge
                 cw_bracket_x = shaft_x + cb_width + uc_width
-                draw_counterweight_bracket(ax, cw_bracket_x, bracket_y, cwb_width, bracket_height, align="right")
+                draw_counterweight_bracket(ax, cw_bracket_x, bracket_y, cwb_width, bracket_height, align="right",
+                           box_width=lift_config.cw_box_width, box_depth=lift_config.cw_box_depth)
 
             # Compute car guide rail outer edges for dynamic bracket widths
             # Guide rails are T-shaped symbols extending outward from unfinished car edges
-            rail_protrusion = config.GUIDE_RAIL_BOX_WIDTH + config.GUIDE_RAIL_STEM_LENGTH + config.GUIDE_RAIL_BAR_THICKNESS
-            car_left_rail = car_center_x - uc_width / 2 - rail_protrusion
-            car_right_rail = car_center_x + uc_width / 2 + rail_protrusion
+            car_left_rail = car_center_x - uc_width / 2 - lift_config.rail_width_left
+            car_right_rail = car_center_x + uc_width / 2 + lift_config.rail_width_right
 
             # Draw car bracket box (blue box on opposite side of counterweight)
             # Dynamic width: extends from shaft wall to car guide rail outer edge
@@ -954,11 +967,11 @@ class LiftShaftSketch:
             cw_side_bracket_y = shaft_y + (sd - config.MRL_CW_SIDE_CAR_BRACKET_HEIGHT) / 2
             if not mirror:
                 # Normal: CW box right edge to car left rail
-                cw_side_bracket_x = shaft_x + (config.CW_BOX_WIDTH - config.CW_FRAME_THICKNESS)
+                cw_side_bracket_x = shaft_x + (cwb_width + lift_config.cw_box_width - config.CW_FRAME_THICKNESS) / 2
                 cw_side_bracket_w = car_left_rail - cw_side_bracket_x
             else:
                 # Mirrored: CW is on right, bracket from car right rail to CW box left edge
-                cw_box_left_edge = shaft_x + sw - (config.CW_BOX_WIDTH - config.CW_FRAME_THICKNESS)
+                cw_box_left_edge = shaft_x + sw - (cwb_width + lift_config.cw_box_width - config.CW_FRAME_THICKNESS) / 2
                 cw_side_bracket_x = car_right_rail
                 cw_side_bracket_w = cw_box_left_edge - car_right_rail
 
@@ -973,7 +986,7 @@ class LiftShaftSketch:
                 available_w = sw - cb_width - cwb_width
                 car_x = shaft_x + cb_width + (available_w - uc_width) / 2
             # Front-fixed: extra depth goes to rear clearance
-            door_zone = 2 * lift_config.door_panel_thickness + config.DEFAULT_DOOR_GAP
+            door_zone = 2 * lift_config.door_panel_thickness + lift_config.door_gap
             car_y = shaft_y + door_zone
 
             draw_lift_car(
@@ -989,6 +1002,8 @@ class LiftShaftSketch:
                 door_opening_type=lift_config.door_opening_type,
                 double_entrance=lift_config.double_entrance,
                 door_offset=lift_config.door_offset_x,
+                rail_width_left=lift_config.rail_width_left,
+                rail_width_right=lift_config.rail_width_right,
             )
 
             # Draw car interior details
@@ -1065,6 +1080,7 @@ class LiftShaftSketch:
                 door_width=lift_config.door_width,
                 door_extension=lift_config.door_extension,
                 door_thickness=lift_config.door_panel_thickness,
+                door_gap=lift_config.door_gap,
                 door_opening_type=lift_config.door_opening_type,
                 telescopic_left_ext=lift_config.telescopic_left_ext,
                 telescopic_right_ext=lift_config.telescopic_right_ext,
@@ -1080,6 +1096,7 @@ class LiftShaftSketch:
                     door_width=lift_config.door_width,
                     door_extension=lift_config.door_extension,
                     door_thickness=lift_config.door_panel_thickness,
+                    door_gap=lift_config.door_gap,
                     mirrored=True,
                     door_opening_type=lift_config.door_opening_type,
                     telescopic_left_ext=lift_config.telescopic_left_ext,
@@ -1088,7 +1105,7 @@ class LiftShaftSketch:
 
         # Position car so bottom touches top of car door (like MRL)
         # Door area = 2 * door_thickness + door_gap
-        car_y = shaft_y + 2 * lift_config.door_panel_thickness + config.DEFAULT_DOOR_GAP
+        car_y = shaft_y + 2 * lift_config.door_panel_thickness + lift_config.door_gap
 
         # Draw brackets
         if display_options["show_brackets"]:
@@ -1096,12 +1113,12 @@ class LiftShaftSketch:
                 # MRA double-entrance / fire: MRL-style side brackets (CW left, car right)
                 bracket_height = sd * 0.7
                 bracket_y = shaft_y + (sd - bracket_height) / 2
-                draw_counterweight_bracket(ax, shaft_x, bracket_y, cwb_width, bracket_height, align="left")
+                draw_counterweight_bracket(ax, shaft_x, bracket_y, cwb_width, bracket_height, align="left",
+                           box_width=lift_config.cw_box_width, box_depth=lift_config.cw_box_depth)
 
                 # Car guide rail protrusion for dynamic bracket box sizing
-                rail_protrusion = config.GUIDE_RAIL_BOX_WIDTH + config.GUIDE_RAIL_STEM_LENGTH + config.GUIDE_RAIL_BAR_THICKNESS
-                car_left_rail = car_center_x - uc_width / 2 - rail_protrusion
-                car_right_rail = car_center_x + uc_width / 2 + rail_protrusion
+                car_left_rail = car_center_x - uc_width / 2 - lift_config.rail_width_left
+                car_right_rail = car_center_x + uc_width / 2 + lift_config.rail_width_right
 
                 # Car bracket box on right side
                 car_bracket_box_y = shaft_y + (sd - config.CAR_BRACKET_BOX_HEIGHT) / 2
@@ -1119,7 +1136,7 @@ class LiftShaftSketch:
 
                 # CW-side car bracket (small bracket in gap between CW box and rail guide)
                 cw_side_bracket_y = shaft_y + (sd - config.MRL_CW_SIDE_CAR_BRACKET_HEIGHT) / 2
-                cw_side_bracket_x = shaft_x + (config.CW_BOX_WIDTH - config.CW_FRAME_THICKNESS)
+                cw_side_bracket_x = shaft_x + (cwb_width + lift_config.cw_box_width - config.CW_FRAME_THICKNESS) / 2
                 cw_side_bracket_w = car_left_rail - cw_side_bracket_x
                 draw_car_bracket_cw_side(ax, cw_side_bracket_x, cw_side_bracket_y, width=cw_side_bracket_w)
             else:
@@ -1132,12 +1149,12 @@ class LiftShaftSketch:
                     shaft_depth=sd,
                     cw_bracket_depth=cw_bracket_depth,
                     wall_gap=lift_config.mra_cw_wall_gap,
+                    box_width=lift_config.mra_cw_box_width,
                 )
 
                 # Draw car brackets on both left and right sides (at car center height)
-                rail_protrusion = config.GUIDE_RAIL_BOX_WIDTH + config.GUIDE_RAIL_STEM_LENGTH + config.GUIDE_RAIL_BAR_THICKNESS
-                left_box_width = car_x - rail_protrusion - shaft_x
-                right_box_width = (shaft_x + shaft_width) - (car_x + uc_width + rail_protrusion)
+                left_box_width = car_x - lift_config.rail_width_left - shaft_x
+                right_box_width = (shaft_x + shaft_width) - (car_x + uc_width + lift_config.rail_width_right)
                 draw_car_brackets_mra(
                     ax,
                     shaft_x=shaft_x,
@@ -1167,6 +1184,8 @@ class LiftShaftSketch:
                 door_opening_type=lift_config.door_opening_type,
                 double_entrance=lift_config.double_entrance,
                 door_offset=lift_config.door_offset_x,
+                rail_width_left=lift_config.rail_width_left,
+                rail_width_right=lift_config.rail_width_right,
             )
 
             # Draw car interior details
@@ -1314,7 +1333,7 @@ class LiftShaftSketch:
                 available_w = lift.shaft_width - left_cb - right_cb
                 car_x = wt + left_cb + (available_w - lift.unfinished_car_width) / 2
                 # MRA: car bottom touches top of car door
-                car_y = wt + 2 * lift.door_panel_thickness + config.DEFAULT_DOOR_GAP
+                car_y = wt + 2 * lift.door_panel_thickness + lift.door_gap
             else:
                 # MRL, or MRA + double_entrance (uses MRL-style side brackets)
                 cwb_w = lift.counterweight_bracket_width
@@ -1322,7 +1341,7 @@ class LiftShaftSketch:
                 available_w = lift.shaft_width - cwb_w - cb_w
                 car_x = wt + cwb_w + (available_w - lift.unfinished_car_width) / 2
                 # Front-fixed: extra depth goes to rear clearance
-                car_y = wt + 2 * lift.door_panel_thickness + config.DEFAULT_DOOR_GAP
+                car_y = wt + 2 * lift.door_panel_thickness + lift.door_gap
 
             finished_car_x = car_x + (lift.unfinished_car_width - lift.finished_car_width) / 2
             finished_car_y = car_y  # Same bottom as unfinished car
@@ -1624,7 +1643,7 @@ class LiftShaftSketch:
         if display_options["show_centerlines"]:
             if self._use_enhanced_api and self.lifts:
                 first = self.lifts[0]
-                door_zone = 2 * first.door_panel_thickness + config.DEFAULT_DOOR_GAP
+                door_zone = 2 * first.door_panel_thickness + first.door_gap
                 center_y = wt + door_zone + first.finished_car_depth / 2
             else:
                 center_y = wt + max_sd / 2
@@ -1762,7 +1781,7 @@ class LiftShaftSketch:
                     right_cb = lift.mra_right_bracket_width
                     available_w = lift.shaft_width - left_cb - right_cb
                     car_x = shaft_left + left_cb + (available_w - lift.unfinished_car_width) / 2
-                    car_y = wt + 2 * lift.door_panel_thickness + config.DEFAULT_DOOR_GAP
+                    car_y = wt + 2 * lift.door_panel_thickness + lift.door_gap
                 else:
                     # MRL, or MRA + double_entrance: center car between brackets
                     if not mirror:
@@ -1776,7 +1795,7 @@ class LiftShaftSketch:
                         available_w = lift.shaft_width - cb_w - cwb_w
                         car_x = shaft_left + cb_w + (available_w - lift.unfinished_car_width) / 2
                     # Front-fixed: extra depth goes to rear clearance
-                    car_y = wt + 2 * lift.door_panel_thickness + config.DEFAULT_DOOR_GAP
+                    car_y = wt + 2 * lift.door_panel_thickness + lift.door_gap
 
                 finished_car_x = car_x + (lift.unfinished_car_width - lift.finished_car_width) / 2
                 finished_car_y = car_y
@@ -1891,14 +1910,14 @@ class LiftShaftSketch:
                 right_cb = first_lift.mra_right_bracket_width
                 available_w = first_lift.shaft_width - left_cb - right_cb
                 first_car_x = first_shaft_left + left_cb + (available_w - first_lift.unfinished_car_width) / 2
-                first_car_y = wt + 2 * first_lift.door_panel_thickness + config.DEFAULT_DOOR_GAP
+                first_car_y = wt + 2 * first_lift.door_panel_thickness + first_lift.door_gap
             else:
                 # First lift is never mirrored (lift_idx 0)
                 cwb_w = first_lift.counterweight_bracket_width
                 cb_w = first_lift.car_bracket_width
                 available_w = first_lift.shaft_width - cwb_w - cb_w
                 first_car_x = first_shaft_left + cwb_w + (available_w - first_lift.unfinished_car_width) / 2
-                first_car_y = wt + 2 * first_lift.door_panel_thickness + config.DEFAULT_DOOR_GAP
+                first_car_y = wt + 2 * first_lift.door_panel_thickness + first_lift.door_gap
 
             first_finished_car_x = first_car_x + (first_lift.unfinished_car_width - first_lift.finished_car_width) / 2
 
@@ -1939,7 +1958,7 @@ class LiftShaftSketch:
                         right_cb = last_lift.mra_right_bracket_width
                         available_w = last_lift.shaft_width - left_cb - right_cb
                         last_car_x = last_shaft_left + left_cb + (available_w - last_lift.unfinished_car_width) / 2
-                        last_car_y = wt + 2 * last_lift.door_panel_thickness + config.DEFAULT_DOOR_GAP
+                        last_car_y = wt + 2 * last_lift.door_panel_thickness + last_lift.door_gap
                     else:
                         if not last_mirror:
                             cwb_w = last_lift.counterweight_bracket_width
@@ -1951,7 +1970,7 @@ class LiftShaftSketch:
                             cwb_w = last_lift.counterweight_bracket_width
                             available_w = last_lift.shaft_width - cb_w - cwb_w
                             last_car_x = last_shaft_left + cb_w + (available_w - last_lift.unfinished_car_width) / 2
-                        last_car_y = wt + 2 * last_lift.door_panel_thickness + config.DEFAULT_DOOR_GAP
+                        last_car_y = wt + 2 * last_lift.door_panel_thickness + last_lift.door_gap
 
                     last_finished_car_x = last_car_x + (last_lift.unfinished_car_width - last_lift.finished_car_width) / 2
                     last_car_right_x = last_car_x + last_lift.unfinished_car_width
@@ -2424,7 +2443,7 @@ class LiftShaftSketch:
 
         # In mirrored orientation, doors are at top (high Y), back is at bottom (low Y)
         # Car Y position: front-fixed (mirrored: door at top, so car top touches door zone)
-        door_zone = 2 * lift_config.door_panel_thickness + config.DEFAULT_DOOR_GAP
+        door_zone = 2 * lift_config.door_panel_thickness + lift_config.door_gap
         car_y = shaft_interior_y + sd - door_zone - uc_depth
 
         # Draw lift doors (at top of shaft for mirrored)
@@ -2438,6 +2457,7 @@ class LiftShaftSketch:
                 door_width=lift_config.door_width,
                 door_extension=lift_config.door_extension,
                 door_thickness=lift_config.door_panel_thickness,
+                door_gap=lift_config.door_gap,
                 mirrored=True,  # Draw doors facing down (into shaft)
                 door_opening_type=lift_config.door_opening_type,
                 telescopic_left_ext=lift_config.telescopic_left_ext,
@@ -2453,6 +2473,7 @@ class LiftShaftSketch:
                     door_width=lift_config.door_width,
                     door_extension=lift_config.door_extension,
                     door_thickness=lift_config.door_panel_thickness,
+                    door_gap=lift_config.door_gap,
                     mirrored=False,
                     door_opening_type=lift_config.door_opening_type,
                     telescopic_left_ext=lift_config.telescopic_left_ext,
@@ -2465,15 +2486,16 @@ class LiftShaftSketch:
             bracket_y = shaft_interior_y + (sd - bracket_height) / 2
 
             if not mirror:
-                draw_counterweight_bracket(ax, shaft_x, bracket_y, cwb_width, bracket_height, align="left")
+                draw_counterweight_bracket(ax, shaft_x, bracket_y, cwb_width, bracket_height, align="left",
+                           box_width=lift_config.cw_box_width, box_depth=lift_config.cw_box_depth)
             else:
                 cw_bracket_x = shaft_x + cb_width + uc_width
-                draw_counterweight_bracket(ax, cw_bracket_x, bracket_y, cwb_width, bracket_height, align="right")
+                draw_counterweight_bracket(ax, cw_bracket_x, bracket_y, cwb_width, bracket_height, align="right",
+                           box_width=lift_config.cw_box_width, box_depth=lift_config.cw_box_depth)
 
             # Compute car guide rail outer edges for dynamic bracket widths
-            rail_protrusion = config.GUIDE_RAIL_BOX_WIDTH + config.GUIDE_RAIL_STEM_LENGTH + config.GUIDE_RAIL_BAR_THICKNESS
-            car_left_rail = car_center_x - uc_width / 2 - rail_protrusion
-            car_right_rail = car_center_x + uc_width / 2 + rail_protrusion
+            car_left_rail = car_center_x - uc_width / 2 - lift_config.rail_width_left
+            car_right_rail = car_center_x + uc_width / 2 + lift_config.rail_width_right
 
             # Draw car bracket box (against shaft wall)
             # Dynamic width: extends from shaft wall to car guide rail outer edge
@@ -2502,11 +2524,11 @@ class LiftShaftSketch:
             cw_side_bracket_y = shaft_interior_y + (sd - config.MRL_CW_SIDE_CAR_BRACKET_HEIGHT) / 2
             if not mirror:
                 # Normal: CW box right edge to car left rail
-                cw_side_bracket_x = shaft_x + (config.CW_BOX_WIDTH - config.CW_FRAME_THICKNESS)
+                cw_side_bracket_x = shaft_x + (cwb_width + lift_config.cw_box_width - config.CW_FRAME_THICKNESS) / 2
                 cw_side_bracket_w = car_left_rail - cw_side_bracket_x
             else:
                 # Mirrored: CW is on right, bracket from car right rail to CW box left edge
-                cw_box_left_edge = shaft_x + sw - (config.CW_BOX_WIDTH - config.CW_FRAME_THICKNESS)
+                cw_box_left_edge = shaft_x + sw - (cwb_width + lift_config.cw_box_width - config.CW_FRAME_THICKNESS) / 2
                 cw_side_bracket_x = car_right_rail
                 cw_side_bracket_w = cw_box_left_edge - car_right_rail
 
@@ -2535,6 +2557,8 @@ class LiftShaftSketch:
                 door_opening_type=lift_config.door_opening_type,
                 double_entrance=lift_config.double_entrance,
                 door_offset=lift_config.door_offset_x,
+                rail_width_left=lift_config.rail_width_left,
+                rail_width_right=lift_config.rail_width_right,
             )
 
             # Draw car interior details
@@ -2596,7 +2620,7 @@ class LiftShaftSketch:
 
         car_center_x = car_x + uc_width / 2
         door_center_x = car_center_x + lift_config.door_offset_x
-        car_y = shaft_y + sd - 2 * lift_config.door_panel_thickness - config.DEFAULT_DOOR_GAP - uc_depth
+        car_y = shaft_y + sd - 2 * lift_config.door_panel_thickness - lift_config.door_gap - uc_depth
 
         # Draw lift doors (at top of shaft)
         if display_options.get("show_lift_doors", False):
@@ -2607,6 +2631,7 @@ class LiftShaftSketch:
                 door_width=lift_config.door_width,
                 door_extension=lift_config.door_extension,
                 door_thickness=lift_config.door_panel_thickness,
+                door_gap=lift_config.door_gap,
                 mirrored=True,
                 door_opening_type=lift_config.door_opening_type,
                 telescopic_left_ext=lift_config.telescopic_left_ext,
@@ -2622,6 +2647,7 @@ class LiftShaftSketch:
                     door_width=lift_config.door_width,
                     door_extension=lift_config.door_extension,
                     door_thickness=lift_config.door_panel_thickness,
+                    door_gap=lift_config.door_gap,
                     mirrored=False,
                     door_opening_type=lift_config.door_opening_type,
                     telescopic_left_ext=lift_config.telescopic_left_ext,
@@ -2634,11 +2660,11 @@ class LiftShaftSketch:
                 # MRA double-entrance / fire mirrored: MRL-style side brackets
                 bracket_height = sd * 0.7
                 bracket_y = shaft_y + (sd - bracket_height) / 2
-                draw_counterweight_bracket(ax, shaft_x, bracket_y, cwb_width, bracket_height, align="left")
+                draw_counterweight_bracket(ax, shaft_x, bracket_y, cwb_width, bracket_height, align="left",
+                           box_width=lift_config.cw_box_width, box_depth=lift_config.cw_box_depth)
 
-                rail_protrusion = config.GUIDE_RAIL_BOX_WIDTH + config.GUIDE_RAIL_STEM_LENGTH + config.GUIDE_RAIL_BAR_THICKNESS
-                car_left_rail = car_center_x - uc_width / 2 - rail_protrusion
-                car_right_rail = car_center_x + uc_width / 2 + rail_protrusion
+                car_left_rail = car_center_x - uc_width / 2 - lift_config.rail_width_left
+                car_right_rail = car_center_x + uc_width / 2 + lift_config.rail_width_right
 
                 car_bracket_box_y = shaft_y + (sd - config.CAR_BRACKET_BOX_HEIGHT) / 2
                 car_bracket_box_x = car_right_rail
@@ -2654,7 +2680,7 @@ class LiftShaftSketch:
                 ))
 
                 cw_side_bracket_y = shaft_y + (sd - config.MRL_CW_SIDE_CAR_BRACKET_HEIGHT) / 2
-                cw_side_bracket_x = shaft_x + (config.CW_BOX_WIDTH - config.CW_FRAME_THICKNESS)
+                cw_side_bracket_x = shaft_x + (cwb_width + lift_config.cw_box_width - config.CW_FRAME_THICKNESS) / 2
                 cw_side_bracket_w = car_left_rail - cw_side_bracket_x
                 draw_car_bracket_cw_side(ax, cw_side_bracket_x, cw_side_bracket_y, width=cw_side_bracket_w)
             else:
@@ -2667,12 +2693,12 @@ class LiftShaftSketch:
                     shaft_depth=sd,
                     cw_bracket_depth=cw_bracket_depth,
                     wall_gap=lift_config.mra_cw_wall_gap,
+                    box_width=lift_config.mra_cw_box_width,
                     mirrored=True,
                 )
 
-                rail_protrusion = config.GUIDE_RAIL_BOX_WIDTH + config.GUIDE_RAIL_STEM_LENGTH + config.GUIDE_RAIL_BAR_THICKNESS
-                left_box_width = car_x - rail_protrusion - shaft_x
-                right_box_width = (shaft_x + shaft_width) - (car_x + uc_width + rail_protrusion)
+                left_box_width = car_x - lift_config.rail_width_left - shaft_x
+                right_box_width = (shaft_x + shaft_width) - (car_x + uc_width + lift_config.rail_width_right)
                 draw_car_brackets_mra(
                     ax,
                     shaft_x=shaft_x,
@@ -2702,6 +2728,8 @@ class LiftShaftSketch:
                 door_opening_type=lift_config.door_opening_type,
                 double_entrance=lift_config.double_entrance,
                 door_offset=lift_config.door_offset_x,
+                rail_width_left=lift_config.rail_width_left,
+                rail_width_right=lift_config.rail_width_right,
             )
 
             finished_car_x = car_x + (uc_width - fc_width) / 2
@@ -2821,7 +2849,7 @@ class LiftShaftSketch:
                 right_cb = lift.mra_right_bracket_width
                 available_w = lift.shaft_width - left_cb - right_cb
                 car_x = shaft_left + left_cb + (available_w - lift.unfinished_car_width) / 2
-                door_zone = 2 * lift.door_panel_thickness + config.DEFAULT_DOOR_GAP
+                door_zone = 2 * lift.door_panel_thickness + lift.door_gap
                 if doors_face == "down":
                     car_y = base_y + wt + door_zone
                 else:
@@ -2832,7 +2860,7 @@ class LiftShaftSketch:
                 # MRL, or MRA + double_entrance: center car between brackets
                 cwb_width = lift.counterweight_bracket_width
                 cb_width = lift.car_bracket_width
-                door_zone = 2 * lift.door_panel_thickness + config.DEFAULT_DOOR_GAP
+                door_zone = 2 * lift.door_panel_thickness + lift.door_gap
                 if not mirror:
                     available_w = lift.shaft_width - cwb_width - cb_width
                     car_x = shaft_left + cwb_width + (available_w - lift.unfinished_car_width) / 2
@@ -3137,7 +3165,7 @@ class LiftShaftSketch:
         first_shaft_left = x_offset + wt
 
         first_sw = shaft_widths[0]
-        first_door_zone = 2 * first_lift.door_panel_thickness + config.DEFAULT_DOOR_GAP
+        first_door_zone = 2 * first_lift.door_panel_thickness + first_lift.door_gap
 
         # Car X: center car in available space between brackets (same as per-lift loop)
         if first_lift.mra_rear_cw:

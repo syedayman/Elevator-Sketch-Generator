@@ -191,6 +191,7 @@ GUIDE_RAIL_BOX_HEIGHT = 300     # Height of white rectangle (vertical dimension)
 
 # Guide rail T-shape dimensions
 GUIDE_RAIL_STEM_LENGTH = 45     # Stem length; guide-rail total = box(30) + stem(45) + bar(25) = 100mm
+DEFAULT_RAIL_WIDTH = 100        # Default total rail width (box + stem + bar); stem flexes with it
 GUIDE_RAIL_STEM_THICKNESS = 25  # Thickness of horizontal stem
 GUIDE_RAIL_BAR_HEIGHT = 75      # Height of vertical bar at end of stem
 GUIDE_RAIL_BAR_THICKNESS = 25   # Thickness of vertical bar
@@ -207,7 +208,7 @@ GUIDE_RAIL_LINE_WIDTH = 0.8            # Edge line width
 
 # MRA Shaft Layout (space allocation for shaft depth calculation)
 MRA_CAR_BRACKET_WIDTH = 325       # Bracket zone each side = 225 bracket + 100 guide rail
-MRA_CW_BRACKET_DEPTH = 425        # CW bracket depth (height of the CW box)
+MRA_CW_BRACKET_DEPTH = 250        # CW bracket depth (height of the CW box)
 MRA_CW_GAP = 50                  # Gap between car top and CW box bottom
 MRA_CW_WALL_GAP = 100             # Rear wall to CW box top (not part of bracket depth)
 

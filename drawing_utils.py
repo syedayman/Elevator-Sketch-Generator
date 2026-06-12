@@ -533,6 +533,8 @@ def draw_counterweight_bracket(
     height: float,
     show_pulley: bool = True,
     align: str = "left",
+    box_width: float = None,
+    box_depth: float = None,
 ) -> None:
     """
     Draw the counterweight bracket area with double-outline frame.
@@ -544,20 +546,19 @@ def draw_counterweight_bracket(
         width: Bracket space width (for positioning, mm)
         height: Bracket space height (for positioning, mm)
         show_pulley: Whether to show pulley/weight representation
-        align: "left" to align box to left edge, "right" to align to right edge
+        align: "left"/"right" — which shaft wall the open frame side faces
+        box_width: CW box full width (mm); None = config default (450)
+        box_depth: CW box depth/height in plan (mm); None = config default (1000)
     """
-    # Use fixed dimensions for the visual CW box
-    # Reduce width by frame_thickness since wall-side bar is removed
-    full_box_width = config.CW_BOX_WIDTH    # 450mm (original)
-    box_height = config.CW_BOX_HEIGHT  # 1000mm
+    # Visual CW box dimensions (frame open on the wall side, so the drawn
+    # rectangle is box_width minus the missing wall-side bar)
+    full_box_width = box_width if box_width is not None else config.CW_BOX_WIDTH
+    box_height = box_depth if box_depth is not None else config.CW_BOX_HEIGHT
     frame_thickness = config.CW_FRAME_THICKNESS  # 50mm
     box_width = full_box_width - frame_thickness  # Shorter since no wall-side bar
 
-    # Align box to edge (left or right) - flush against wall
-    if align == "left":
-        box_x = x  # Left edge touches shaft edge (wall)
-    else:  # right
-        box_x = x + width - box_width  # Right edge touches shaft edge (wall)
+    # Centered horizontally within the bracket zone
+    box_x = x + (width - box_width) / 2
     box_y = y + (height - box_height) / 2
 
     frame_color = config.CW_FRAME_COLOR
@@ -708,6 +709,8 @@ def draw_lift_car(
     door_opening_type: str = "centre",
     double_entrance: bool = False,
     door_offset: float = 0,
+    rail_width_left: float = None,
+    rail_width_right: float = None,
 ) -> None:
     """
     Draw the lift car with both unfinished and finished boundaries.
@@ -854,9 +857,9 @@ def draw_lift_car(
     # Draw guide rail symbols on left and right edges of unfinished car
     car_vertical_center = y + unfinished_depth / 2
     # Left side: rectangle extends leftward from dashed line
-    draw_guide_rail_symbol(ax, x, car_vertical_center, side="left")
+    draw_guide_rail_symbol(ax, x, car_vertical_center, side="left", rail_width=rail_width_left)
     # Right side: rectangle extends rightward from dashed line
-    draw_guide_rail_symbol(ax, x + unfinished_width, car_vertical_center, side="right")
+    draw_guide_rail_symbol(ax, x + unfinished_width, car_vertical_center, side="right", rail_width=rail_width_right)
 
 
 def draw_door_panels(
@@ -1093,9 +1096,9 @@ def _draw_door_inner_details(
         left_span = (door_center_x - half, door_center_x + p)
         right_span = (door_center_x - p, door_center_x + half)
         if telescopic_side == "left":
-            upper_span, lower_span = left_span, right_span
-        else:
             upper_span, lower_span = right_span, left_span
+        else:
+            upper_span, lower_span = left_span, right_span
         ax.add_patch(Rectangle(
             (upper_span[0], upper_y), upper_span[1] - upper_span[0], row_height, **panel_props))
         ax.add_patch(Rectangle(
@@ -1368,6 +1371,7 @@ def draw_guide_rail_symbol(
     x: float,
     y: float,
     side: str = "left",
+    rail_width: float = None,
 ) -> None:
     """
     Draw a guide rail symbol (vertical box with T-shape extending outward).
@@ -1384,13 +1388,18 @@ def draw_guide_rail_symbol(
         x: X coordinate of the dashed line edge
         y: Y coordinate (vertical center of symbol)
         side: "left" or "right" - determines which direction T extends
+        rail_width: Total rail width (box + stem + bar). Box and bar are fixed;
+            the stem absorbs the difference. None = config default.
     """
     box_width = config.GUIDE_RAIL_BOX_WIDTH
     box_height = config.GUIDE_RAIL_BOX_HEIGHT
-    stem_length = config.GUIDE_RAIL_STEM_LENGTH
     stem_thickness = config.GUIDE_RAIL_STEM_THICKNESS
     bar_height = config.GUIDE_RAIL_BAR_HEIGHT
     bar_thickness = config.GUIDE_RAIL_BAR_THICKNESS
+    if rail_width is not None:
+        stem_length = max(0.0, rail_width - box_width - bar_thickness)
+    else:
+        stem_length = config.GUIDE_RAIL_STEM_LENGTH
 
     if side == "right":
         # RIGHT side: box left edge ON dashed line, extends rightward
@@ -1469,6 +1478,7 @@ def draw_counterweight_bracket_top(
     shaft_depth: float,
     cw_bracket_depth: float,
     wall_gap: float = None,
+    box_width: float = None,
     mirrored: bool = False,
 ) -> None:
     """
@@ -1494,8 +1504,8 @@ def draw_counterweight_bracket_top(
     """
     if wall_gap is None:
         wall_gap = config.MRA_CW_WALL_GAP
-
-    box_width = config.MRA_CW_BOX_WIDTH
+    if box_width is None:
+        box_width = config.MRA_CW_BOX_WIDTH
     column_width = config.MRA_CW_BRACKET_COLUMN_WIDTH
     arm_length = config.MRA_CW_BRACKET_ARM_LENGTH
     arm_thickness = config.MRA_CW_BRACKET_ARM_THICKNESS

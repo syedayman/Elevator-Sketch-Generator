@@ -454,9 +454,15 @@ FIRE_MIN_SHAFT_WIDTH = config.FIRE_LIFT_MIN_SHAFT_WIDTH           # 2700
 FIRE_MIN_SHAFT_WIDTH_TELESCOPIC = config.FIRE_LIFT_MIN_SHAFT_WIDTH_TELESCOPIC  # 2550
 TELESCOPIC_LEFT_EXT_EXTRA = config.TELESCOPIC_LEFT_EXTENSION_EXTRA   # 100
 TELESCOPIC_RIGHT_EXT = config.TELESCOPIC_RIGHT_EXTENSION             # 200
-MRL_CW_BRACKET_MIN = config.DEFAULT_COUNTERWEIGHT_BRACKET_WIDTH      # 625
-MRL_CAR_BRACKET_MIN = config.DEFAULT_CAR_BRACKET_WIDTH               # 375
-MRA_CAR_BRACKET_MIN = config.MRA_CAR_BRACKET_WIDTH                   # 325
+# Bracket form fields hold PURE bracket widths; rails are separate inputs.
+# Zone width (what the sketch arrows show) = pure bracket + rail.
+RAIL_WIDTH_DEFAULT = config.DEFAULT_RAIL_WIDTH                                        # 100
+CW_BOX_WIDTH_DEFAULT = config.CW_BOX_WIDTH                                            # 450
+CW_BOX_DEPTH_DEFAULT = config.CW_BOX_HEIGHT                                           # 1000
+MRA_CW_BOX_WIDTH_DEFAULT = config.MRA_CW_BOX_WIDTH                                    # 1100
+MRL_CW_BRACKET_MIN = config.DEFAULT_COUNTERWEIGHT_BRACKET_WIDTH - RAIL_WIDTH_DEFAULT  # 525
+MRL_CAR_BRACKET_MIN = config.DEFAULT_CAR_BRACKET_WIDTH - RAIL_WIDTH_DEFAULT           # 275
+MRA_CAR_BRACKET_MIN = config.MRA_CAR_BRACKET_WIDTH - RAIL_WIDTH_DEFAULT               # 225
 MRA_CW_BRACKET_DEPTH_MIN = config.MRA_CW_BRACKET_DEPTH               # 400
 MRA_CW_GAP_MIN = config.MRA_CW_GAP                                   # 100
 MRA_CW_WALL_GAP_MIN = config.MRA_CW_WALL_GAP                         # 100
@@ -484,14 +490,15 @@ def make_default_lift(lift_type: str = "passenger", machine_type: str = "mrl") -
     mra_rear_cw = machine_type == "mra" and not is_fire
 
     if mra_rear_cw:
-        shaft_w = uc_w + 2 * MRA_CAR_BRACKET_MIN
+        shaft_w = uc_w + 2 * (MRA_CAR_BRACKET_MIN + RAIL_WIDTH_DEFAULT)
         shaft_d = (2 * PANEL_THICKNESS_DEFAULT + DOOR_GAP + uc_d + MRA_CW_GAP_MIN
                    + MRA_CW_BRACKET_DEPTH_MIN + MRA_CW_WALL_GAP_MIN)
         mra_cw_depth = MRA_CW_BRACKET_DEPTH_MIN
         mra_cw_gap = MRA_CW_GAP_MIN
         mra_cw_wall_gap = MRA_CW_WALL_GAP_MIN
     else:
-        shaft_w = MRL_CW_BRACKET_MIN + uc_w + MRL_CAR_BRACKET_MIN
+        shaft_w = (MRL_CW_BRACKET_MIN + RAIL_WIDTH_DEFAULT) + uc_w \
+                  + (MRL_CAR_BRACKET_MIN + RAIL_WIDTH_DEFAULT)
         shaft_d = 2 * PANEL_THICKNESS_DEFAULT + DOOR_GAP + uc_d + REAR_CLEARANCE
         cw_bracket = MRL_CW_BRACKET_MIN
         car_bracket = MRL_CAR_BRACKET_MIN
@@ -501,13 +508,14 @@ def make_default_lift(lift_type: str = "passenger", machine_type: str = "mrl") -
     if is_fire:
         shaft_w = max(shaft_w, FIRE_MIN_SHAFT_WIDTH)
 
+    # Redistribute extra width into the PURE brackets (rails stay at default)
     if mra_rear_cw:
-        avail_w = shaft_w - uc_w
+        avail_w = shaft_w - uc_w - 2 * RAIL_WIDTH_DEFAULT
         extra = max(0, avail_w - 2 * MRA_CAR_BRACKET_MIN)
         mra_left = MRA_CAR_BRACKET_MIN + extra // 2
         mra_right = avail_w - mra_left
     else:
-        avail_w = shaft_w - uc_w
+        avail_w = shaft_w - uc_w - 2 * RAIL_WIDTH_DEFAULT
         extra = max(0, avail_w - MRL_CW_BRACKET_MIN - MRL_CAR_BRACKET_MIN)
         cw_bracket = MRL_CW_BRACKET_MIN + extra // 2
         car_bracket = avail_w - cw_bracket
@@ -543,6 +551,12 @@ def make_default_lift(lift_type: str = "passenger", machine_type: str = "mrl") -
         "telescopic_right_ext": tele_right,
         "cw_bracket_width": cw_bracket,
         "car_bracket_width": car_bracket,
+        "rail_width_left": RAIL_WIDTH_DEFAULT,
+        "rail_width_right": RAIL_WIDTH_DEFAULT,
+        "door_gap": DOOR_GAP,
+        "cw_box_width": CW_BOX_WIDTH_DEFAULT,
+        "cw_box_depth": CW_BOX_DEPTH_DEFAULT,
+        "mra_cw_box_width": MRA_CW_BOX_WIDTH_DEFAULT,
         "mra_left_bracket": mra_left,
         "mra_right_bracket": mra_right,
         "mra_cw_bracket_depth": mra_cw_depth,
@@ -569,14 +583,29 @@ def make_default_section() -> dict:
     }
 
 
+def lift_rails(lift: dict) -> tuple:
+    """Per-lift rail widths with defaults (left, right)."""
+    rl = lift.get("rail_width_left")
+    rr = lift.get("rail_width_right")
+    return (rl if rl is not None else RAIL_WIDTH_DEFAULT,
+            rr if rr is not None else RAIL_WIDTH_DEFAULT)
+
+
+def lift_door_gap(lift: dict) -> float:
+    """Per-lift running clearance with default."""
+    g = lift.get("door_gap")
+    return g if g is not None else DOOR_GAP
+
+
 def compute_min_shaft_width(lift: dict, machine_type: str) -> int:
-    """Port of computeMinShaftWidth()."""
+    """Port of computeMinShaftWidth(). Zone = pure bracket + rail."""
     uc_w = lift["width"] + 2 * CAR_WALL_THICKNESS
+    rail_l, rail_r = lift_rails(lift)
     if machine_type == "mra" and not lift.get("double_entrance") and lift["type"] != "fire":
-        min_w = MRA_CAR_BRACKET_MIN + uc_w + MRA_CAR_BRACKET_MIN
+        min_w = (MRA_CAR_BRACKET_MIN + rail_l) + uc_w + (MRA_CAR_BRACKET_MIN + rail_r)
     else:
         # MRL, or MRA with MRL-style side brackets (double entrance / fire)
-        min_w = MRL_CW_BRACKET_MIN + uc_w + MRL_CAR_BRACKET_MIN
+        min_w = (MRL_CW_BRACKET_MIN + rail_l) + uc_w + (MRL_CAR_BRACKET_MIN + rail_r)
     if lift["type"] == "fire":
         fire_min = (FIRE_MIN_SHAFT_WIDTH_TELESCOPIC
                     if lift.get("door_opening_type") == "telescopic"
@@ -712,7 +741,8 @@ def render_lift_config_form(
     def _cb_cabin():
         data = st.session_state[data_key]
         w, d = (int(x) for x in st.session_state[f"{prefix}_w_cabin"].split("x"))
-        new_avail = data["shaft_width"] - (w + 2 * CAR_WALL_THICKNESS)
+        rail_l, rail_r = lift_rails(data)
+        new_avail = data["shaft_width"] - (w + 2 * CAR_WALL_THICKNESS) - rail_l - rail_r
         upd = {"width": w, "depth": d}
         if machine_type == "mrl" or data["double_entrance"] or data["type"] == "fire":
             extra = max(0, new_avail - MRL_CW_BRACKET_MIN - MRL_CAR_BRACKET_MIN)
@@ -725,14 +755,15 @@ def render_lift_config_form(
             upd["mra_left_bracket"] = left
             upd["mra_right_bracket"] = new_avail - left
         if data["double_entrance"]:
-            door_zone = 2 * (data["door_panel_thickness"] or PANEL_THICKNESS_DEFAULT) + DOOR_GAP
+            door_zone = 2 * (data["door_panel_thickness"] or PANEL_THICKNESS_DEFAULT) + lift_door_gap(data)
             upd["shaft_depth"] = door_zone + d + door_zone
         _apply(upd)
 
     def _cb_width():
         data = st.session_state[data_key]
         v = st.session_state[f"{prefix}_w_width"]
-        new_avail = data["shaft_width"] - (v + 2 * CAR_WALL_THICKNESS)
+        rail_l, rail_r = lift_rails(data)
+        new_avail = data["shaft_width"] - (v + 2 * CAR_WALL_THICKNESS) - rail_l - rail_r
         upd = {"width": v}
         half = new_avail // 2
         if machine_type == "mrl":
@@ -747,8 +778,9 @@ def render_lift_config_form(
         data = st.session_state[data_key]
         new_sw = st.session_state[f"{prefix}_w_shaft_width"]
         uc_w = data["width"] + 2 * CAR_WALL_THICKNESS
-        old_avail = data["shaft_width"] - uc_w
-        new_avail = new_sw - uc_w
+        rail_l, rail_r = lift_rails(data)
+        old_avail = data["shaft_width"] - uc_w - rail_l - rail_r
+        new_avail = new_sw - uc_w - rail_l - rail_r
         half = (new_avail - old_avail) // 2
         upd = {"shaft_width": new_sw}
         if machine_type == "mrl" or data["double_entrance"] or data["type"] == "fire":
@@ -769,7 +801,7 @@ def render_lift_config_form(
         upd = {"shaft_depth": new_sd}
         if machine_type == "mra" and not data["double_entrance"] and data["type"] != "fire":
             uc_d = data["depth"] + CAR_WALL_THICKNESS
-            fixed_depth = 2 * (data["door_panel_thickness"] or PANEL_THICKNESS_DEFAULT) + DOOR_GAP + uc_d
+            fixed_depth = 2 * (data["door_panel_thickness"] or PANEL_THICKNESS_DEFAULT) + lift_door_gap(data) + uc_d
             wall_gap = data["mra_cw_wall_gap"] if data["mra_cw_wall_gap"] is not None else MRA_CW_WALL_GAP_MIN
             old_avail_d = data["shaft_depth"] - fixed_depth - wall_gap
             new_avail_d = new_sd - fixed_depth - wall_gap
@@ -782,7 +814,46 @@ def render_lift_config_form(
 
     def _avail_w():
         data = st.session_state[data_key]
-        return data["shaft_width"] - (data["width"] + 2 * CAR_WALL_THICKNESS)
+        rail_l, rail_r = lift_rails(data)
+        return data["shaft_width"] - (data["width"] + 2 * CAR_WALL_THICKNESS) - rail_l - rail_r
+
+    def _cb_rail_left():
+        # Rail edit: same-side bracket absorbs (zone and shaft width stay put)
+        data = st.session_state[data_key]
+        v = max(0, st.session_state[f"{prefix}_w_rail_width_left"])
+        old_l, _ = lift_rails(data)
+        delta = v - old_l
+        upd = {"rail_width_left": v}
+        if machine_type == "mrl" or data["double_entrance"] or data["type"] == "fire":
+            cw = data["cw_bracket_width"] if data["cw_bracket_width"] is not None else MRL_CW_BRACKET_MIN
+            upd["cw_bracket_width"] = cw - delta
+        else:
+            left = data["mra_left_bracket"] if data["mra_left_bracket"] is not None else MRA_CAR_BRACKET_MIN
+            upd["mra_left_bracket"] = left - delta
+        _apply(upd)
+
+    def _cb_rail_right():
+        data = st.session_state[data_key]
+        v = max(0, st.session_state[f"{prefix}_w_rail_width_right"])
+        _, old_r = lift_rails(data)
+        delta = v - old_r
+        upd = {"rail_width_right": v}
+        if machine_type == "mrl" or data["double_entrance"] or data["type"] == "fire":
+            car = data["car_bracket_width"] if data["car_bracket_width"] is not None else MRL_CAR_BRACKET_MIN
+            upd["car_bracket_width"] = car - delta
+        else:
+            right = data["mra_right_bracket"] if data["mra_right_bracket"] is not None else MRA_CAR_BRACKET_MIN
+            upd["mra_right_bracket"] = right - delta
+        _apply(upd)
+
+    def _cb_door_gap():
+        data = st.session_state[data_key]
+        v = max(0, st.session_state[f"{prefix}_w_door_gap"])
+        upd = {"door_gap": v}
+        if data["double_entrance"]:
+            door_zone = 2 * (data["door_panel_thickness"] or PANEL_THICKNESS_DEFAULT) + v
+            upd["shaft_depth"] = door_zone + data["depth"] + door_zone
+        _apply(upd)
 
     def _cb_cw():
         v = max(0, st.session_state[f"{prefix}_w_cw_bracket_width"])
@@ -803,7 +874,7 @@ def render_lift_config_form(
     def _avail_d():
         data = st.session_state[data_key]
         uc_d = data["depth"] + CAR_WALL_THICKNESS
-        fixed = 2 * (data["door_panel_thickness"] or PANEL_THICKNESS_DEFAULT) + DOOR_GAP + uc_d
+        fixed = 2 * (data["door_panel_thickness"] or PANEL_THICKNESS_DEFAULT) + lift_door_gap(data) + uc_d
         wall_gap = data["mra_cw_wall_gap"] if data["mra_cw_wall_gap"] is not None else MRA_CW_WALL_GAP_MIN
         return data["shaft_depth"] - fixed - wall_gap
 
@@ -819,7 +890,7 @@ def render_lift_config_form(
         data = st.session_state[data_key]
         v = max(0, st.session_state[f"{prefix}_w_mra_cw_wall_gap"])
         uc_d = data["depth"] + CAR_WALL_THICKNESS
-        fixed = 2 * (data["door_panel_thickness"] or PANEL_THICKNESS_DEFAULT) + DOOR_GAP + uc_d
+        fixed = 2 * (data["door_panel_thickness"] or PANEL_THICKNESS_DEFAULT) + lift_door_gap(data) + uc_d
         new_avail_d = data["shaft_depth"] - fixed - v
         cwd = data["mra_cw_bracket_depth"] if data["mra_cw_bracket_depth"] is not None else MRA_CW_BRACKET_DEPTH_MIN
         _apply({"mra_cw_wall_gap": v, "mra_cw_gap": max(0, new_avail_d - cwd)})
@@ -831,11 +902,11 @@ def render_lift_config_form(
         on = st.session_state[f"{prefix}_w_double_entrance"]
         upd = {"double_entrance": on}
         if on:
-            door_zone = 2 * (data["door_panel_thickness"] or PANEL_THICKNESS_DEFAULT) + DOOR_GAP
+            door_zone = 2 * (data["door_panel_thickness"] or PANEL_THICKNESS_DEFAULT) + lift_door_gap(data)
             upd["shaft_depth"] = door_zone + data["depth"] + door_zone
         else:
             uc_d = data["depth"] + CAR_WALL_THICKNESS
-            upd["shaft_depth"] = 2 * PANEL_THICKNESS_DEFAULT + DOOR_GAP + uc_d + REAR_CLEARANCE
+            upd["shaft_depth"] = 2 * PANEL_THICKNESS_DEFAULT + lift_door_gap(data) + uc_d + REAR_CLEARANCE
         _apply(upd)
 
     def _cb_door_width():
@@ -873,7 +944,7 @@ def render_lift_config_form(
         v = st.session_state[f"{prefix}_w_door_panel_thickness"]
         upd = {"door_panel_thickness": v}
         if data["double_entrance"]:
-            door_zone = 2 * v + DOOR_GAP
+            door_zone = 2 * v + lift_door_gap(data)
             upd["shaft_depth"] = door_zone + data["depth"] + door_zone
         _apply(upd)
 
@@ -1016,6 +1087,36 @@ def render_lift_config_form(
                  help="Space between rear wall and CW box. CW gap auto-adjusts.",
                  seed=L["mra_cw_wall_gap"] if L["mra_cw_wall_gap"] is not None else MRA_CW_WALL_GAP_MIN)
 
+        # Car guide rails (decoupled from brackets; arrow shows bracket + rail)
+        rc1, rc2 = st.columns(2)
+        with rc1:
+            _num("rail_width_left", "Left Rail Width (mm)", step=5,
+                 on_change=_cb_rail_left,
+                 help="Bracket on this side auto-adjusts; arrow shows bracket + rail.",
+                 seed=L.get("rail_width_left") if L.get("rail_width_left") is not None else RAIL_WIDTH_DEFAULT)
+        with rc2:
+            _num("rail_width_right", "Right Rail Width (mm)", step=5,
+                 on_change=_cb_rail_right,
+                 help="Bracket on this side auto-adjusts.",
+                 seed=L.get("rail_width_right") if L.get("rail_width_right") is not None else RAIL_WIDTH_DEFAULT)
+
+        # CW box visual dimensions (free inputs; the box floats inside its zone)
+        if machine_type == "mrl" or L["double_entrance"] or L["type"] == "fire":
+            cwb1, cwb2 = st.columns(2)
+            with cwb1:
+                _num("cw_box_width", "CW Box Width (mm)", step=25,
+                     on_change=_store("cw_box_width"),
+                     seed=L.get("cw_box_width") if L.get("cw_box_width") is not None else CW_BOX_WIDTH_DEFAULT)
+            with cwb2:
+                _num("cw_box_depth", "CW Box Depth (mm)", step=25,
+                     on_change=_store("cw_box_depth"),
+                     seed=L.get("cw_box_depth") if L.get("cw_box_depth") is not None else CW_BOX_DEPTH_DEFAULT)
+        else:
+            _num("mra_cw_box_width", "CW Box Width (mm)", step=25,
+                 on_change=_store("mra_cw_box_width"),
+                 help="Width of the rear CW box (depth = CW Bracket Depth).",
+                 seed=L.get("mra_cw_box_width") if L.get("mra_cw_box_width") is not None else MRA_CW_BOX_WIDTH_DEFAULT)
+
         # Door Settings
         st.markdown("**Door Settings**")
         dwc1, dwc2 = st.columns(2)
@@ -1026,6 +1127,11 @@ def render_lift_config_form(
         with dwc2:
             _num("door_height", "Door Height (mm)", min_value=1500, max_value=3500, step=50,
                  on_change=_store("door_height"))
+
+        _num("door_gap", "Running Clearance (mm)", min_value=0, max_value=500, step=5,
+             on_change=_cb_door_gap,
+             help="Clearance between the landing and car door.",
+             seed=L.get("door_gap") if L.get("door_gap") is not None else DOOR_GAP)
 
         if is_fire:
             otkey = f"{prefix}_w_door_opening_type"
@@ -1129,18 +1235,31 @@ def build_lift_config(lift_data: dict, machine_type: str, wall_thickness: float)
     if lift_data.get("capacity"):
         kwargs["lift_capacity"] = lift_data["capacity"]
 
+    # Rails + running clearance (LiftConfig bracket fields are ZONE widths,
+    # so form's pure bracket values get the rail added back below)
+    rail_l, rail_r = lift_rails(lift_data)
+    kwargs["rail_width_left"] = rail_l
+    kwargs["rail_width_right"] = rail_r
+    kwargs["door_gap"] = lift_door_gap(lift_data)
+    if lift_data.get("cw_box_width") is not None:
+        kwargs["cw_box_width"] = lift_data["cw_box_width"]
+    if lift_data.get("cw_box_depth") is not None:
+        kwargs["cw_box_depth"] = lift_data["cw_box_depth"]
+    if lift_data.get("mra_cw_box_width") is not None:
+        kwargs["mra_cw_box_width"] = lift_data["mra_cw_box_width"]
+
     is_double_entrance = lift_data.get("double_entrance", False)
     is_fire = lift_data.get("type") == "fire"
     if machine_type == "mrl" or (machine_type == "mra" and (is_double_entrance or is_fire)):
         if lift_data.get("cw_bracket_width") is not None:
-            kwargs["counterweight_bracket_width"] = lift_data["cw_bracket_width"]
+            kwargs["counterweight_bracket_width"] = lift_data["cw_bracket_width"] + rail_l
         if lift_data.get("car_bracket_width") is not None:
-            kwargs["car_bracket_width"] = lift_data["car_bracket_width"]
+            kwargs["car_bracket_width"] = lift_data["car_bracket_width"] + rail_r
     if machine_type == "mra":
         if lift_data.get("mra_left_bracket") is not None:
-            kwargs["mra_car_bracket_width"] = lift_data["mra_left_bracket"]
+            kwargs["mra_car_bracket_width"] = lift_data["mra_left_bracket"] + rail_l
         if lift_data.get("mra_right_bracket") is not None:
-            kwargs["mra_car_bracket_width_right"] = lift_data["mra_right_bracket"]
+            kwargs["mra_car_bracket_width_right"] = lift_data["mra_right_bracket"] + rail_r
         if lift_data.get("mra_cw_bracket_depth") is not None:
             kwargs["mra_cw_bracket_depth"] = lift_data["mra_cw_bracket_depth"]
         if lift_data.get("mra_cw_wall_gap") is not None:
