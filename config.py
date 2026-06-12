@@ -215,13 +215,13 @@ MRA_CW_WALL_GAP = 100             # Rear wall to CW box top (not part of bracket
 # MRA CW Box (white box; its depth comes from mra_cw_bracket_depth)
 MRA_CW_BOX_WIDTH = 1100           # CW box width
 
-# MRA CW Wall Brackets (black inverted-L brackets hanging from the rear wall,
-# one on each side of the CW box, ending flush with the box bottom)
+# MRA CW Wall Brackets (outline-only inverted-L brackets hanging from the rear
+# wall, one on each side of the CW box, ending flush with the box bottom)
 MRA_CW_BRACKET_COLUMN_WIDTH = 75     # Descending column width
 MRA_CW_BRACKET_ARM_LENGTH = 175      # Arm length along the wall (includes column width)
 MRA_CW_BRACKET_ARM_THICKNESS = 75    # Arm thickness (depth from wall)
 MRA_CW_BRACKET_CLEARANCE = 140       # Horizontal clearance between box edge and column
-MRA_CW_BRACKET_COLOR = "#000000"     # Solid black fill
+MRA_CW_BRACKET_COLOR = "#000000"     # Legacy fill color (brackets now drawn outline-only)
 
 # MRA Blue Box (car brackets on left/right sides)
 MRA_CAR_BRACKET_BOX_WIDTH = 200   # Blue box width

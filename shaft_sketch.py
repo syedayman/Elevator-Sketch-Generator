@@ -92,7 +92,7 @@ class LiftConfig:
     rail_width_right: float = field(default_factory=lambda: config.DEFAULT_RAIL_WIDTH)
     # Running clearance between landing and car door
     door_gap: float = field(default_factory=lambda: config.DEFAULT_DOOR_GAP)
-    # CW box visual dimensions (free inputs; boxes float inside their zones)
+    # CW box visual dimensions (free inputs; boxes sit flush against the shaft wall)
     cw_box_width: float = field(default_factory=lambda: config.CW_BOX_WIDTH)
     cw_box_depth: float = field(default_factory=lambda: config.CW_BOX_HEIGHT)
     mra_cw_box_width: float = field(default_factory=lambda: config.MRA_CW_BOX_WIDTH)
@@ -238,7 +238,7 @@ class LiftConfig:
                     f"Unfinished Car ({int(self.unfinished_car_width)}) + "
                     f"Right Bracket ({int(self.mra_right_bracket_width)})")
         else:
-            return (f"CW Bracket ({int(self.counterweight_bracket_width)}) + "
+            return (f"CWT Bracket ({int(self.counterweight_bracket_width)}) + "
                     f"Unfinished Car ({int(self.unfinished_car_width)}) + "
                     f"Car Bracket ({int(self.car_bracket_width)})")
 
@@ -253,9 +253,9 @@ class LiftConfig:
             return (f"2 x Door ({int(self.door_panel_thickness)}) + "
                     f"Gap ({int(self.door_gap)}) + "
                     f"Unfinished Car ({int(self.unfinished_car_depth)}) + "
-                    f"CW Gap ({int(config.MRA_CW_GAP)}) + "
-                    f"CW Bracket ({int(self.mra_cw_bracket_depth)}) + "
-                    f"CW Wall Gap ({int(self.mra_cw_wall_gap)})")
+                    f"CWT Gap ({int(config.MRA_CW_GAP)}) + "
+                    f"CWT Bracket ({int(self.mra_cw_bracket_depth)}) + "
+                    f"CWT Wall Gap ({int(self.mra_cw_wall_gap)})")
         else:
             return (f"Unfinished Car ({int(self.unfinished_car_depth)}) + "
                     f"2 x Door ({int(self.door_panel_thickness)}) + "
@@ -967,11 +967,11 @@ class LiftShaftSketch:
             cw_side_bracket_y = shaft_y + (sd - config.MRL_CW_SIDE_CAR_BRACKET_HEIGHT) / 2
             if not mirror:
                 # Normal: CW box right edge to car left rail
-                cw_side_bracket_x = shaft_x + (cwb_width + lift_config.cw_box_width - config.CW_FRAME_THICKNESS) / 2
+                cw_side_bracket_x = shaft_x + (lift_config.cw_box_width - config.CW_FRAME_THICKNESS)
                 cw_side_bracket_w = car_left_rail - cw_side_bracket_x
             else:
                 # Mirrored: CW is on right, bracket from car right rail to CW box left edge
-                cw_box_left_edge = shaft_x + sw - (cwb_width + lift_config.cw_box_width - config.CW_FRAME_THICKNESS) / 2
+                cw_box_left_edge = shaft_x + sw - (lift_config.cw_box_width - config.CW_FRAME_THICKNESS)
                 cw_side_bracket_x = car_right_rail
                 cw_side_bracket_w = cw_box_left_edge - car_right_rail
 
@@ -1136,7 +1136,7 @@ class LiftShaftSketch:
 
                 # CW-side car bracket (small bracket in gap between CW box and rail guide)
                 cw_side_bracket_y = shaft_y + (sd - config.MRL_CW_SIDE_CAR_BRACKET_HEIGHT) / 2
-                cw_side_bracket_x = shaft_x + (cwb_width + lift_config.cw_box_width - config.CW_FRAME_THICKNESS) / 2
+                cw_side_bracket_x = shaft_x + (lift_config.cw_box_width - config.CW_FRAME_THICKNESS)
                 cw_side_bracket_w = car_left_rail - cw_side_bracket_x
                 draw_car_bracket_cw_side(ax, cw_side_bracket_x, cw_side_bracket_y, width=cw_side_bracket_w)
             else:
@@ -1219,26 +1219,28 @@ class LiftShaftSketch:
         shaft_top_y = wt + sd  # Inner top edge of shaft
         shaft_right_x = wt + sw  # Inner right edge of shaft
 
-        # Internal width dimension (top, level 1 - closest to drawing)
-        # Extension lines start from inner shaft top edge
+        # Internal width dimension (top, level 3 - topmost, furthest from drawing)
+        # Extension lines clipped at outer shaft boundary
         draw_dimension_line(
             ax,
             start=(wt, shaft_top_y),
             end=(wt + sw, shaft_top_y),
             text=f"Shaft Width {int(sw)}",
-            offset=250 + wt,  # Add wall thickness to keep dimension line at same position
+            offset=850 + wt,  # Add wall thickness to keep dimension line at same position
             orientation="horizontal",
+            ext_clip=shaft_top_y + wt,  # Outer top face
         )
 
-        # Internal depth dimension (left side, level 1)
-        # Extension lines start from inner shaft left edge, positioned outside left wall
+        # Internal depth dimension (left side, level 3 - outermost)
+        # Extension lines clipped at outer shaft boundary
         draw_dimension_line(
             ax,
             start=(wt, wt),
             end=(wt, wt + sd),
             text=f"Shaft Depth {int(sd)}",
-            offset=-(wt + 250),  # Position outside left wall
+            offset=-(wt + 850),  # Position outside left wall
             orientation="vertical",
+            ext_clip=0,  # Outer left face
         )
 
         # Get door width
@@ -1352,16 +1354,15 @@ class LiftShaftSketch:
             finished_car_top_y = finished_car_y + lift.finished_car_depth
             finished_car_right_x = finished_car_x + lift.finished_car_width
 
-            # Target dimension line positions (same as before)
-            # Level 2: shaft_top_y + 550 + wt = wt + sd + 550 + wt
-            # Level 3: shaft_top_y + 850 + wt = wt + sd + 850 + wt
+            # Target dimension line positions (shaft width sits at level 3, topmost)
+            # Level 1: shaft_top_y + 250 + wt (closest to drawing)
+            # Level 2: shaft_top_y + 550 + wt
+            level1_target_y = shaft_top_y + 250 + wt
             level2_target_y = shaft_top_y + 550 + wt
-            level3_target_y = shaft_top_y + 850 + wt
-            level2_target_x = shaft_right_x + 550 + wt
-            level3_target_x = shaft_right_x + 850 + wt
 
             if lift.mra_rear_cw:
                 # MRA: Dynamic left bracket (shaft wall to car left edge)
+                # Drawn at bottom, same row as door width
                 shaft_left_wall = wt
                 left_cb = lift.mra_car_bracket_width
                 right_cb = lift.mra_right_bracket_width
@@ -1370,10 +1371,10 @@ class LiftShaftSketch:
                 left_gap = car_left_edge - shaft_left_wall
                 draw_dimension_line(
                     ax,
-                    start=(shaft_left_wall, shaft_top_y),
-                    end=(car_left_edge, shaft_top_y),
+                    start=(shaft_left_wall, 0),
+                    end=(car_left_edge, 0),
                     text=f"{int(left_gap)}",
-                    offset=level2_target_y - shaft_top_y,
+                    offset=-150,
                     orientation="horizontal",
                 )
 
@@ -1383,80 +1384,84 @@ class LiftShaftSketch:
                 right_gap = shaft_right_wall - car_right_edge
                 draw_dimension_line(
                     ax,
-                    start=(car_right_edge, shaft_top_y),
-                    end=(shaft_right_wall, shaft_top_y),
+                    start=(car_right_edge, 0),
+                    end=(shaft_right_wall, 0),
                     text=f"{int(right_gap)}",
-                    offset=level2_target_y - shaft_top_y,
+                    offset=-150,
                     orientation="horizontal",
                 )
             else:
-                # MRL, or MRA + double_entrance: Counterweight bracket width (top, level 2)
-                # Extension from shaft top edge
+                # MRL, or MRA + double_entrance: Counterweight bracket width
+                # Drawn at bottom, same row as door width
                 draw_dimension_line(
                     ax,
-                    start=(wt, shaft_top_y),
-                    end=(wt + lift.counterweight_bracket_width, shaft_top_y),
+                    start=(wt, 0),
+                    end=(wt + lift.counterweight_bracket_width, 0),
                     text=f"{int(lift.counterweight_bracket_width)}",
-                    offset=level2_target_y - shaft_top_y,
+                    offset=-150,
                     orientation="horizontal",
                 )
 
-                # MRL: Car bracket width (top, level 2)
+                # MRL: Car bracket width (bottom, same row as door width)
                 # Dimension from unfinished car right edge to shaft wall
                 car_right_edge = wt + lift.counterweight_bracket_width + lift.unfinished_car_width
                 shaft_wall_x = wt + lift.shaft_width
                 bracket_gap = shaft_wall_x - car_right_edge
                 draw_dimension_line(
                     ax,
-                    start=(car_right_edge, shaft_top_y),
-                    end=(shaft_wall_x, shaft_top_y),
+                    start=(car_right_edge, 0),
+                    end=(shaft_wall_x, 0),
                     text=f"{int(bracket_gap)}",
-                    offset=level2_target_y - shaft_top_y,
+                    offset=-150,
                     orientation="horizontal",
                 )
 
-            # Finished car width (top, level 2 - closer to drawing)
-            # Extension from finished car top edge
+            # Finished car width (top, level 1 - closest to drawing)
+            # Extension lines clipped at outer shaft boundary
             draw_dimension_line(
                 ax,
                 start=(finished_car_x, finished_car_top_y),
                 end=(finished_car_x + lift.finished_car_width, finished_car_top_y),
                 text=f"Finished Car Width {int(lift.finished_car_width)}",
-                offset=level2_target_y - finished_car_top_y,
+                offset=level1_target_y - finished_car_top_y,
                 orientation="horizontal",
+                ext_clip=shaft_top_y + wt,  # Outer top face
             )
 
-            # Unfinished car width (top, level 3 - further from drawing)
-            # Extension from car top edge
+            # Unfinished car width (top, level 2 - middle)
+            # Extension lines clipped at outer shaft boundary
             draw_dimension_line(
                 ax,
                 start=(car_x, car_top_y),
                 end=(car_x + lift.unfinished_car_width, car_top_y),
                 text=f"Unfinished Car Width {int(lift.unfinished_car_width)}",
-                offset=level3_target_y - car_top_y,
+                offset=level2_target_y - car_top_y,
                 orientation="horizontal",
+                ext_clip=shaft_top_y + wt,  # Outer top face
             )
 
-            # Finished car depth (left side, level 2)
-            # Extension from finished car left edge, positioned outside left wall
+            # Finished car depth (left side, level 1 - closest to drawing)
+            # Extension lines clipped at outer shaft boundary
             draw_dimension_line(
                 ax,
                 start=(finished_car_x, car_y),
                 end=(finished_car_x, car_y + lift.finished_car_depth),
                 text=f"Finished Car Depth {int(lift.finished_car_depth)}",
-                offset=-(finished_car_x + 550),  # Position further outside left wall
+                offset=-(finished_car_x + 250),  # Position outside left wall
                 orientation="vertical",
+                ext_clip=0,  # Outer left face
             )
 
-            # Unfinished car depth (left side, level 3)
-            # Extension from unfinished car left edge, positioned further outside
+            # Unfinished car depth (left side, level 2 - middle)
+            # Extension lines clipped at outer shaft boundary
             draw_dimension_line(
                 ax,
                 start=(car_x, car_y),
                 end=(car_x, car_y + lift.unfinished_car_depth),
                 text=f"Unfinished Car Depth {int(lift.unfinished_car_depth)}",
-                offset=-(car_x + 850),  # Position even further outside left wall
+                offset=-(car_x + 550),  # Position further outside left wall
                 orientation="vertical",
+                ext_clip=0,  # Outer left face
             )
 
     def _draw_multi_lift_bank(
@@ -1676,16 +1681,18 @@ class LiftShaftSketch:
                 lift = None
                 sow = self.structural_opening_width
 
-            # Shaft width (level 1)
+            # Shaft width (level 3 - topmost, furthest from drawing)
             # Extension from inner shaft top edge (use max_sd for consistent dimension line position)
+            # Extension lines clipped at this lift's outer shaft boundary
             shaft_top_y = wt + max_sd
             draw_dimension_line(
                 ax,
                 start=(shaft_left, shaft_top_y),
                 end=(shaft_left + sw, shaft_top_y),
                 text=f"Shaft Width {int(sw)}",
-                offset=250 + wt,  # Add wall thickness to keep dimension line outside
+                offset=850 + wt,  # Add wall thickness to keep dimension line outside
                 orientation="horizontal",
+                ext_clip=sd + 2 * wt,  # This lift's outer top face
             )
 
             # Get door width and heights for this lift
@@ -1804,12 +1811,13 @@ class LiftShaftSketch:
                 car_top_y = car_y + lift.unfinished_car_depth
                 finished_car_top_y = finished_car_y + lift.finished_car_depth
 
-                # Target dimension line positions
+                # Target dimension line positions (shaft width sits at level 3, topmost)
+                level1_target_y = shaft_top_y + 250 + wt
                 level2_target_y = shaft_top_y + 550 + wt
-                level3_target_y = shaft_top_y + 850 + wt
 
                 if lift.mra_rear_cw:
                     # MRA: Dynamic left bracket (shaft wall to car left edge)
+                    # Drawn at bottom, same row as door width
                     left_cb = lift.mra_car_bracket_width
                     right_cb = lift.mra_right_bracket_width
                     available_w = lift.shaft_width - left_cb - right_cb
@@ -1817,10 +1825,10 @@ class LiftShaftSketch:
                     left_gap = car_left_edge - shaft_left
                     draw_dimension_line(
                         ax,
-                        start=(shaft_left, shaft_top_y),
-                        end=(car_left_edge, shaft_top_y),
+                        start=(shaft_left, 0),
+                        end=(car_left_edge, 0),
                         text=f"{int(left_gap)}",
-                        offset=level2_target_y - shaft_top_y,
+                        offset=-150,
                         orientation="horizontal",
                     )
 
@@ -1830,10 +1838,10 @@ class LiftShaftSketch:
                     right_gap = shaft_wall_x - car_right_edge
                     draw_dimension_line(
                         ax,
-                        start=(car_right_edge, shaft_top_y),
-                        end=(shaft_wall_x, shaft_top_y),
+                        start=(car_right_edge, 0),
+                        end=(shaft_wall_x, 0),
                         text=f"{int(right_gap)}",
-                        offset=level2_target_y - shaft_top_y,
+                        offset=-150,
                         orientation="horizontal",
                     )
                 else:
@@ -1845,48 +1853,52 @@ class LiftShaftSketch:
                         # Mirrored: car bracket on left, CW bracket on right
                         left_bracket_width = lift.car_bracket_width
 
-                    # Left bracket width (top, level 2)
+                    # Left bracket width (bottom, same row as door width)
                     draw_dimension_line(
                         ax,
-                        start=(shaft_left, shaft_top_y),
-                        end=(shaft_left + left_bracket_width, shaft_top_y),
+                        start=(shaft_left, 0),
+                        end=(shaft_left + left_bracket_width, 0),
                         text=f"{int(left_bracket_width)}",
-                        offset=level2_target_y - shaft_top_y,
+                        offset=-150,
                         orientation="horizontal",
                     )
 
-                    # Right bracket width (top, level 2)
+                    # Right bracket width (bottom, same row as door width)
                     # Dynamic: measure from unfinished car right edge to shaft wall
                     car_right_edge = shaft_left + left_bracket_width + lift.unfinished_car_width
                     shaft_wall_x = shaft_left + sw
                     right_gap = shaft_wall_x - car_right_edge
                     draw_dimension_line(
                         ax,
-                        start=(car_right_edge, shaft_top_y),
-                        end=(shaft_wall_x, shaft_top_y),
+                        start=(car_right_edge, 0),
+                        end=(shaft_wall_x, 0),
                         text=f"{int(right_gap)}",
-                        offset=level2_target_y - shaft_top_y,
+                        offset=-150,
                         orientation="horizontal",
                     )
 
-                # Finished car width (top, level 2 - closer to drawing)
+                # Finished car width (top, level 1 - closest to drawing)
+                # Extension lines clipped at this lift's outer shaft boundary
                 draw_dimension_line(
                     ax,
                     start=(finished_car_x, finished_car_top_y),
                     end=(finished_car_x + lift.finished_car_width, finished_car_top_y),
                     text=f"Finished Car Width {int(lift.finished_car_width)}",
-                    offset=level2_target_y - finished_car_top_y,
+                    offset=level1_target_y - finished_car_top_y,
                     orientation="horizontal",
+                    ext_clip=sd + 2 * wt,  # This lift's outer top face
                 )
 
-                # Unfinished car width (top, level 3 - further from drawing)
+                # Unfinished car width (top, level 2 - middle)
+                # Extension lines clipped at this lift's outer shaft boundary
                 draw_dimension_line(
                     ax,
                     start=(car_x, car_top_y),
                     end=(car_x + lift.unfinished_car_width, car_top_y),
                     text=f"Unfinished Car Width {int(lift.unfinished_car_width)}",
-                    offset=level3_target_y - car_top_y,
+                    offset=level2_target_y - car_top_y,
                     orientation="horizontal",
+                    ext_clip=sd + 2 * wt,  # This lift's outer top face
                 )
 
             # Move to next shaft
@@ -1922,13 +1934,15 @@ class LiftShaftSketch:
             first_finished_car_x = first_car_x + (first_lift.unfinished_car_width - first_lift.finished_car_width) / 2
 
             # First lift depth dimensions (left side)
+            # Extension lines clipped at outer shaft boundary
             draw_dimension_line(
                 ax,
                 start=(first_finished_car_x, first_car_y),
                 end=(first_finished_car_x, first_car_y + first_lift.finished_car_depth),
                 text=f"Finished Car Depth {int(first_lift.finished_car_depth)}",
-                offset=-(first_finished_car_x + 550),
+                offset=-(first_finished_car_x + 250),
                 orientation="vertical",
+                ext_clip=0,  # Outer left face
             )
 
             draw_dimension_line(
@@ -1936,8 +1950,9 @@ class LiftShaftSketch:
                 start=(first_car_x, first_car_y),
                 end=(first_car_x, first_car_y + first_lift.unfinished_car_depth),
                 text=f"Unfinished Car Depth {int(first_lift.unfinished_car_depth)}",
-                offset=-(first_car_x + 850),
+                offset=-(first_car_x + 550),
                 orientation="vertical",
+                ext_clip=0,  # Outer left face
             )
 
             # Last lift depth dimensions (right side) - only if different from first lift
@@ -1977,53 +1992,57 @@ class LiftShaftSketch:
                     last_finished_car_right_x = last_finished_car_x + last_lift.finished_car_width
 
                     # Right side offset calculation (same approach as left side):
-                    # Left side order: shaft depth (level 1), finished car (level 2), unfinished car (level 3)
-                    # Right side: same order - shaft depth closest to wall
+                    # Order outermost -> innermost: shaft depth, unfinished car, finished car
 
-                    # Shaft depth (right side, level 1) - from inner right wall edge
+                    # Shaft depth (right side, level 3 - outermost) - from inner right wall edge
                     # Show the last lift's actual depth
+                    # Extension lines clipped at outer shaft boundary
                     bank_right_inner = self.total_width - wt
                     draw_dimension_line(
                         ax,
                         start=(bank_right_inner, wt),
                         end=(bank_right_inner, wt + last_sd),
                         text=f"Shaft Depth {int(last_sd)}",
-                        offset=(self.total_width + 250) - bank_right_inner,
+                        offset=(self.total_width + 850) - bank_right_inner,
                         orientation="vertical",
+                        ext_clip=self.total_width,  # Outer right face
                     )
 
-                    # Last lift finished car depth (right side, level 2)
+                    # Last lift finished car depth (right side, level 1 - closest to wall)
                     draw_dimension_line(
                         ax,
                         start=(last_finished_car_right_x, last_car_y),
                         end=(last_finished_car_right_x, last_car_y + last_lift.finished_car_depth),
                         text=f"Finished Car Depth {int(last_lift.finished_car_depth)}",
-                        offset=(self.total_width + 550) - last_finished_car_right_x,
+                        offset=(self.total_width + 250) - last_finished_car_right_x,
                         orientation="vertical",
+                        ext_clip=self.total_width,  # Outer right face
                     )
 
-                    # Last lift unfinished car depth (right side, level 3)
+                    # Last lift unfinished car depth (right side, level 2 - middle)
                     draw_dimension_line(
                         ax,
                         start=(last_car_right_x, last_car_y),
                         end=(last_car_right_x, last_car_y + last_lift.unfinished_car_depth),
                         text=f"Unfinished Car Depth {int(last_lift.unfinished_car_depth)}",
-                        offset=(self.total_width + 850) - last_car_right_x,
+                        offset=(self.total_width + 550) - last_car_right_x,
                         orientation="vertical",
+                        ext_clip=self.total_width,  # Outer right face
                     )
 
-        # Internal depth dimension (left side, level 1) - show first lift's actual depth
+        # Internal depth dimension (left side, level 3 - outermost) - show first lift's actual depth
         first_sd = self._shaft_depths[0] if self._use_enhanced_api else max_sd
         draw_dimension_line(
             ax,
             start=(wt, wt),
             end=(wt, wt + first_sd),
             text=f"Shaft Depth {int(first_sd)}",
-            offset=-(wt + 250),  # Position outside left wall
+            offset=-(wt + 850),  # Position outside left wall
             orientation="vertical",
+            ext_clip=0,  # Outer left face
         )
 
-        # Separator dimension (top, level 3 - same as unfinished car width)
+        # Separator dimension (top, level 3 - same row as shaft width)
         if self.num_lifts > 1:
             # Draw separator dimensions for first separator (between lift 0 and 1)
             first_swt = self._shared_wall_thicknesses[0]
@@ -2037,6 +2056,7 @@ class LiftShaftSketch:
                 text=f"{int(first_swt)}",
                 offset=850 + wt,
                 orientation="horizontal",
+                ext_clip=shaft_top_y + wt,  # Outer top face
             )
 
             # Add "STEEL BEAM" label above the dimension for steel separators
@@ -2524,11 +2544,11 @@ class LiftShaftSketch:
             cw_side_bracket_y = shaft_interior_y + (sd - config.MRL_CW_SIDE_CAR_BRACKET_HEIGHT) / 2
             if not mirror:
                 # Normal: CW box right edge to car left rail
-                cw_side_bracket_x = shaft_x + (cwb_width + lift_config.cw_box_width - config.CW_FRAME_THICKNESS) / 2
+                cw_side_bracket_x = shaft_x + (lift_config.cw_box_width - config.CW_FRAME_THICKNESS)
                 cw_side_bracket_w = car_left_rail - cw_side_bracket_x
             else:
                 # Mirrored: CW is on right, bracket from car right rail to CW box left edge
-                cw_box_left_edge = shaft_x + sw - (cwb_width + lift_config.cw_box_width - config.CW_FRAME_THICKNESS) / 2
+                cw_box_left_edge = shaft_x + sw - (lift_config.cw_box_width - config.CW_FRAME_THICKNESS)
                 cw_side_bracket_x = car_right_rail
                 cw_side_bracket_w = cw_box_left_edge - car_right_rail
 
@@ -2680,7 +2700,7 @@ class LiftShaftSketch:
                 ))
 
                 cw_side_bracket_y = shaft_y + (sd - config.MRL_CW_SIDE_CAR_BRACKET_HEIGHT) / 2
-                cw_side_bracket_x = shaft_x + (cwb_width + lift_config.cw_box_width - config.CW_FRAME_THICKNESS) / 2
+                cw_side_bracket_x = shaft_x + (lift_config.cw_box_width - config.CW_FRAME_THICKNESS)
                 cw_side_bracket_w = car_left_rail - cw_side_bracket_x
                 draw_car_bracket_cw_side(ax, cw_side_bracket_x, cw_side_bracket_y, width=cw_side_bracket_w)
             else:
@@ -2828,9 +2848,9 @@ class LiftShaftSketch:
             dim_above = False
 
         # Target dimension line positions (consistent offsets from shaft edge)
-        level1_offset = 250 + wt  # Shaft width
-        level2_offset = 550 + wt  # Brackets, finished car width
-        level3_offset = 850 + wt  # Unfinished car width
+        level1_offset = 250 + wt  # Finished car width (closest to drawing)
+        level2_offset = 550 + wt  # Unfinished car width
+        level3_offset = 850 + wt  # Shaft width (outermost)
 
         # Individual shaft dimensions
         x_pos = x_offset + wt
@@ -2888,17 +2908,19 @@ class LiftShaftSketch:
 
             if dim_above:
                 # Dimensions above the bank (doors facing down)
-                # Shaft width (level 1)
+                # Shaft width (level 3 - topmost, furthest from drawing)
+                # Extension lines clipped at this lift's outer shaft boundary
                 draw_dimension_line(
                     ax,
                     start=(shaft_left, shaft_top_y),
                     end=(shaft_left + sw, shaft_top_y),
                     text=f"Shaft Width {int(sw)}",
-                    offset=level1_offset,
+                    offset=level3_offset,
                     orientation="horizontal",
+                    ext_clip=base_y + 2 * wt + sd,  # This lift's outer top face
                 )
 
-                # Bracket widths (level 2)
+                # Bracket widths (front wall side, same row as door width)
                 if lift.mra_rear_cw:
                     # MRA: Dynamic left bracket (shaft wall to car left edge)
                     left_cb = lift.mra_car_bracket_width
@@ -2908,10 +2930,10 @@ class LiftShaftSketch:
                     left_gap = car_left_edge - shaft_left
                     draw_dimension_line(
                         ax,
-                        start=(shaft_left, shaft_top_y),
-                        end=(car_left_edge, shaft_top_y),
+                        start=(shaft_left, front_wall_y),
+                        end=(car_left_edge, front_wall_y),
                         text=f"{int(left_gap)}",
-                        offset=level2_offset,
+                        offset=-150,
                         orientation="horizontal",
                     )
                     # MRA: Dynamic right bracket (car right edge to shaft wall)
@@ -2920,10 +2942,10 @@ class LiftShaftSketch:
                     right_gap = shaft_wall_x - car_right_edge
                     draw_dimension_line(
                         ax,
-                        start=(car_right_edge, shaft_top_y),
-                        end=(shaft_wall_x, shaft_top_y),
+                        start=(car_right_edge, front_wall_y),
+                        end=(shaft_wall_x, front_wall_y),
                         text=f"{int(right_gap)}",
-                        offset=level2_offset,
+                        offset=-150,
                         orientation="horizontal",
                     )
                 else:
@@ -2935,10 +2957,10 @@ class LiftShaftSketch:
 
                     draw_dimension_line(
                         ax,
-                        start=(shaft_left, shaft_top_y),
-                        end=(shaft_left + left_bracket_width, shaft_top_y),
+                        start=(shaft_left, front_wall_y),
+                        end=(shaft_left + left_bracket_width, front_wall_y),
                         text=f"{int(left_bracket_width)}",
-                        offset=level2_offset,
+                        offset=-150,
                         orientation="horizontal",
                     )
                     # Dynamic: measure from unfinished car right edge to shaft wall
@@ -2947,31 +2969,35 @@ class LiftShaftSketch:
                     right_gap = shaft_wall_x - car_right_edge
                     draw_dimension_line(
                         ax,
-                        start=(car_right_edge, shaft_top_y),
-                        end=(shaft_wall_x, shaft_top_y),
+                        start=(car_right_edge, front_wall_y),
+                        end=(shaft_wall_x, front_wall_y),
                         text=f"{int(right_gap)}",
-                        offset=level2_offset,
+                        offset=-150,
                         orientation="horizontal",
                     )
 
-                # Finished car width (level 2, from actual car edge)
+                # Finished car width (level 1 - closest to drawing, from actual car edge)
+                # Extension lines clipped at this lift's outer shaft boundary
                 draw_dimension_line(
                     ax,
                     start=(finished_car_x, finished_car_top_y),
                     end=(finished_car_x + lift.finished_car_width, finished_car_top_y),
                     text=f"Finished Car Width {int(lift.finished_car_width)}",
-                    offset=shaft_top_y + level2_offset - finished_car_top_y,
+                    offset=shaft_top_y + level1_offset - finished_car_top_y,
                     orientation="horizontal",
+                    ext_clip=base_y + 2 * wt + sd,  # This lift's outer top face
                 )
 
-                # Unfinished car width (level 3, from actual car edge)
+                # Unfinished car width (level 2 - middle, from actual car edge)
+                # Extension lines clipped at this lift's outer shaft boundary
                 draw_dimension_line(
                     ax,
                     start=(car_x, car_top_y),
                     end=(car_x + lift.unfinished_car_width, car_top_y),
                     text=f"Unfinished Car Width {int(lift.unfinished_car_width)}",
-                    offset=shaft_top_y + level3_offset - car_top_y,
+                    offset=shaft_top_y + level2_offset - car_top_y,
                     orientation="horizontal",
+                    ext_clip=base_y + 2 * wt + sd,  # This lift's outer top face
                 )
 
             else:
@@ -2979,17 +3005,19 @@ class LiftShaftSketch:
                 car_bottom_y = car_y
                 finished_car_bottom_y = finished_car_y
 
-                # Shaft width (level 1, below front wall)
+                # Shaft width (level 3 - bottommost, furthest from drawing)
+                # Extension lines clipped at this lift's outer shaft boundary
                 draw_dimension_line(
                     ax,
                     start=(shaft_left, base_y),
                     end=(shaft_left + sw, base_y),
                     text=f"Shaft Width {int(sw)}",
-                    offset=-level1_offset,
+                    offset=-level3_offset,
                     orientation="horizontal",
+                    ext_clip=base_y + (max_shaft_depth - sd),  # This lift's outer bottom face
                 )
 
-                # Bracket widths (level 2)
+                # Bracket widths (front wall side at top, same row as door width)
                 if lift.mra_rear_cw:
                     # MRA: Dynamic left bracket (shaft wall to car left edge)
                     left_cb = lift.mra_car_bracket_width
@@ -2999,10 +3027,10 @@ class LiftShaftSketch:
                     left_gap = car_left_edge - shaft_left
                     draw_dimension_line(
                         ax,
-                        start=(shaft_left, base_y),
-                        end=(car_left_edge, base_y),
+                        start=(shaft_left, front_wall_y + wt),
+                        end=(car_left_edge, front_wall_y + wt),
                         text=f"{int(left_gap)}",
-                        offset=-level2_offset,
+                        offset=150,
                         orientation="horizontal",
                     )
                     # MRA: Dynamic right bracket (car right edge to shaft wall)
@@ -3011,10 +3039,10 @@ class LiftShaftSketch:
                     right_gap = shaft_wall_x - car_right_edge
                     draw_dimension_line(
                         ax,
-                        start=(car_right_edge, base_y),
-                        end=(shaft_wall_x, base_y),
+                        start=(car_right_edge, front_wall_y + wt),
+                        end=(shaft_wall_x, front_wall_y + wt),
                         text=f"{int(right_gap)}",
-                        offset=-level2_offset,
+                        offset=150,
                         orientation="horizontal",
                     )
                 else:
@@ -3025,10 +3053,10 @@ class LiftShaftSketch:
 
                     draw_dimension_line(
                         ax,
-                        start=(shaft_left, base_y),
-                        end=(shaft_left + left_bracket_width, base_y),
+                        start=(shaft_left, front_wall_y + wt),
+                        end=(shaft_left + left_bracket_width, front_wall_y + wt),
                         text=f"{int(left_bracket_width)}",
-                        offset=-level2_offset,
+                        offset=150,
                         orientation="horizontal",
                     )
                     # Dynamic: measure from unfinished car right edge to shaft wall
@@ -3037,33 +3065,37 @@ class LiftShaftSketch:
                     right_gap = shaft_wall_x - car_right_edge
                     draw_dimension_line(
                         ax,
-                        start=(car_right_edge, base_y),
-                        end=(shaft_wall_x, base_y),
+                        start=(car_right_edge, front_wall_y + wt),
+                        end=(shaft_wall_x, front_wall_y + wt),
                         text=f"{int(right_gap)}",
-                        offset=-level2_offset,
+                        offset=150,
                         orientation="horizontal",
                     )
 
-                # Finished car width (level 2, from actual car edge)
-                # Target position: base_y - level2_offset (below bank)
+                # Finished car width (level 1 - closest to drawing, from actual car edge)
+                # Target position: base_y - level1_offset (below bank)
+                # Extension lines clipped at this lift's outer shaft boundary
                 draw_dimension_line(
                     ax,
                     start=(finished_car_x, finished_car_bottom_y),
                     end=(finished_car_x + lift.finished_car_width, finished_car_bottom_y),
                     text=f"Finished Car Width {int(lift.finished_car_width)}",
-                    offset=(base_y - level2_offset) - finished_car_bottom_y,
+                    offset=(base_y - level1_offset) - finished_car_bottom_y,
                     orientation="horizontal",
+                    ext_clip=base_y + (max_shaft_depth - sd),  # This lift's outer bottom face
                 )
 
-                # Unfinished car width (level 3, from actual car edge)
-                # Target position: base_y - level3_offset (below bank)
+                # Unfinished car width (level 2 - middle, from actual car edge)
+                # Target position: base_y - level2_offset (below bank)
+                # Extension lines clipped at this lift's outer shaft boundary
                 draw_dimension_line(
                     ax,
                     start=(car_x, car_bottom_y),
                     end=(car_x + lift.unfinished_car_width, car_bottom_y),
                     text=f"Unfinished Car Width {int(lift.unfinished_car_width)}",
-                    offset=(base_y - level3_offset) - car_bottom_y,
+                    offset=(base_y - level2_offset) - car_bottom_y,
                     orientation="horizontal",
+                    ext_clip=base_y + (max_shaft_depth - sd),  # This lift's outer bottom face
                 )
 
             # --- Door and structural opening dimensions (near front wall) ---
@@ -3194,14 +3226,16 @@ class LiftShaftSketch:
         else:
             shaft_interior_start_y = base_y + wt + (max_shaft_depth - first_sd)
 
-        # Shaft depth (left side, level 1) - from actual shaft interior edges
+        # Shaft depth (left side, level 3 - outermost) - from actual shaft interior edges
+        # Extension lines clipped at outer shaft boundary
         draw_dimension_line(
             ax,
             start=(first_shaft_left, shaft_interior_start_y),
             end=(first_shaft_left, shaft_interior_start_y + first_sd),
             text=f"Shaft Depth {int(first_sd)}",
-            offset=-(first_shaft_left - x_offset + 250),
+            offset=-(first_shaft_left - x_offset + 850),
             orientation="vertical",
+            ext_clip=x_offset,  # Outer left face of the bank
         )
 
         # Car depth dimensions - extension lines should coincide at the door side
@@ -3209,24 +3243,27 @@ class LiftShaftSketch:
         # Mirrored (doors up): both start from top (shared edge)
         if doors_face == "down":
             # Normal: dimensions from bottom (shared edge) upward
-            # Finished car depth (left side, level 2)
+            # Finished car depth (left side, level 1 - closest to drawing)
+            # Extension lines clipped at outer shaft boundary
             draw_dimension_line(
                 ax,
                 start=(first_finished_car_x, first_car_y),
                 end=(first_finished_car_x, first_car_y + first_lift.finished_car_depth),
                 text=f"Finished Car Depth {int(first_lift.finished_car_depth)}",
-                offset=-(first_finished_car_x - x_offset + 550),
+                offset=-(first_finished_car_x - x_offset + 250),
                 orientation="vertical",
+                ext_clip=x_offset,  # Outer left face of the bank
             )
 
-            # Unfinished car depth (left side, level 3)
+            # Unfinished car depth (left side, level 2 - middle)
             draw_dimension_line(
                 ax,
                 start=(first_car_x, first_car_y),
                 end=(first_car_x, first_car_y + first_lift.unfinished_car_depth),
                 text=f"Unfinished Car Depth {int(first_lift.unfinished_car_depth)}",
-                offset=-(first_car_x - x_offset + 850),
+                offset=-(first_car_x - x_offset + 550),
                 orientation="vertical",
+                ext_clip=x_offset,  # Outer left face of the bank
             )
         else:
             # Mirrored: dimensions from top (shared edge near doors) downward
@@ -3235,24 +3272,27 @@ class LiftShaftSketch:
             # Finished car in mirrored mode: top at car_top_y, bottom at car_top_y - finished_depth
             finished_car_bottom_y = car_top_y - first_lift.finished_car_depth
 
-            # Finished car depth (left side, level 2) - from shared top edge
+            # Finished car depth (left side, level 1 - closest to drawing) - from shared top edge
+            # Extension lines clipped at outer shaft boundary
             draw_dimension_line(
                 ax,
                 start=(first_finished_car_x, finished_car_bottom_y),
                 end=(first_finished_car_x, car_top_y),
                 text=f"Finished Car Depth {int(first_lift.finished_car_depth)}",
-                offset=-(first_finished_car_x - x_offset + 550),
+                offset=-(first_finished_car_x - x_offset + 250),
                 orientation="vertical",
+                ext_clip=x_offset,  # Outer left face of the bank
             )
 
-            # Unfinished car depth (left side, level 3) - from shared top edge
+            # Unfinished car depth (left side, level 2 - middle) - from shared top edge
             draw_dimension_line(
                 ax,
                 start=(first_car_x, first_car_y),
                 end=(first_car_x, car_top_y),
                 text=f"Unfinished Car Depth {int(first_lift.unfinished_car_depth)}",
-                offset=-(first_car_x - x_offset + 850),
+                offset=-(first_car_x - x_offset + 550),
                 orientation="vertical",
+                ext_clip=x_offset,  # Outer left face of the bank
             )
 
         # --- Separator dimension (if multiple lifts, level 3 - same as unfinished car width) ---
@@ -3268,6 +3308,7 @@ class LiftShaftSketch:
                     text=f"{int(first_swt)}",
                     offset=level3_offset,
                     orientation="horizontal",
+                    ext_clip=shaft_top_y + wt,  # Outer top face
                 )
                 # Steel beam label
                 if first_sep_type == "steel_beam":

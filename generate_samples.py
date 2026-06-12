@@ -1,4 +1,4 @@
-"""
+﻿"""
 Example script demonstrating lift shaft sketch generation.
 
 Run from the repository root:
@@ -20,11 +20,13 @@ import argparse
 import sys
 from pathlib import Path
 
-# Add parent directory to path if running directly
-if __name__ == "__main__":
-    sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-
-from prototypes.sketch_generator import LiftShaftSketch, LiftConfig, LiftSectionSketch, SectionConfig
+try:
+    from prototypes.sketch_generator import LiftShaftSketch, LiftConfig, LiftSectionSketch, SectionConfig
+except ImportError:
+    # Flat layout (this repo): modules sit next to this script
+    sys.path.insert(0, str(Path(__file__).parent))
+    from shaft_sketch import LiftShaftSketch, LiftConfig
+    from section_sketch import LiftSectionSketch, SectionConfig
 
 
 def generate_mrl_samples(output_dir: Path) -> None:
@@ -152,7 +154,7 @@ def generate_mrl_samples(output_dir: Path) -> None:
         output_dir / "06_two_passenger_common_shaft.png",
         title="TWO-LIFT BANK - COMMON SHAFT",
     )
-    print(f"   Separator type: {sketch6._separator_type}")
+    print(f"   Separator type: {sketch6._separator_types}")
     print(f"   Saved: {path6}")
 
     # Example 7: Fire + Passenger lift in common shaft (RCC wall separator)
@@ -165,7 +167,7 @@ def generate_mrl_samples(output_dir: Path) -> None:
         finished_car_depth=2300,
         counterweight_bracket_width=625,
         car_bracket_width=375,
-        door_width=1100,
+        door_width=1200,  # Fire lift minimum door width
         structural_opening_width=1300,
     )
     lift7b = LiftConfig(
@@ -187,7 +189,7 @@ def generate_mrl_samples(output_dir: Path) -> None:
         output_dir / "07_fire_passenger_dual_boundary.png",
         title="FIRE + PASSENGER LIFT (DUAL BOUNDARY)",
     )
-    print(f"   Separator type: {sketch7._separator_type}")
+    print(f"   Separator type: {sketch7._separator_types}")
     print(f"   Fire lift shaft depth: {sketch7._shaft_depths[0]}mm")
     print(f"   Passenger lift shaft depth: {sketch7._shaft_depths[1]}mm")
     print(f"   Max shaft depth (envelope): {sketch7._max_shaft_depth}mm")
@@ -202,6 +204,7 @@ def generate_mrl_samples(output_dir: Path) -> None:
         finished_car_depth=2200,
         counterweight_bracket_width=625,
         car_bracket_width=375,
+        door_width=1200,  # Fire lift minimum door width
     )
     lift8b = LiftConfig(
         lift_type="passenger",
@@ -224,7 +227,7 @@ def generate_mrl_samples(output_dir: Path) -> None:
         output_dir / "08_fire_two_passenger.png",
         title="FIRE + TWO PASSENGER LIFTS",
     )
-    print(f"   Separator type: {sketch8._separator_type}")
+    print(f"   Separator type: {sketch8._separator_types}")
     print(f"   Shaft depths: {[int(d) for d in sketch8._shaft_depths]}mm")
     print(f"   Saved: {path8}")
 
@@ -277,7 +280,7 @@ def generate_mrl_samples(output_dir: Path) -> None:
         finished_car_depth=2400,
         counterweight_bracket_width=625,
         car_bracket_width=375,
-        door_width=1100,
+        door_width=1200,  # Fire lift minimum door width
         structural_opening_width=1300,
     )
     sketch10 = LiftShaftSketch(
@@ -302,7 +305,7 @@ def generate_mrl_samples(output_dir: Path) -> None:
         finished_car_depth=2200,
         counterweight_bracket_width=625,
         car_bracket_width=375,
-        door_width=1100,
+        door_width=1200,  # Fire lift minimum door width
         structural_opening_width=1300,
     )
     sketch11 = LiftShaftSketch(
@@ -384,7 +387,7 @@ def generate_mrl_samples(output_dir: Path) -> None:
         lift_capacity=1800,
         finished_car_width=1500,  # Valid fire lift size
         finished_car_depth=2300,
-        door_width=1100,
+        door_width=1200,  # Fire lift minimum door width
         structural_opening_width=1300,
     )
     bank1_pass1 = LiftConfig(
@@ -489,7 +492,10 @@ def generate_mrl_samples(output_dir: Path) -> None:
     # Print fire lift cabin sizes
     print("\nFire Lift Cabin Sizes (Width x Depth):")
     print("-" * 40)
-    from prototypes.sketch_generator import FIRE_LIFT_CABIN_SIZES
+    try:
+        from prototypes.sketch_generator import FIRE_LIFT_CABIN_SIZES
+    except ImportError:
+        from shaft_sketch import FIRE_LIFT_CABIN_SIZES
     for w, d in FIRE_LIFT_CABIN_SIZES:
         print(f"  {w}mm x {d}mm")
 
@@ -538,7 +544,7 @@ def generate_mra_samples(output_dir: Path) -> None:
         show_accessibility=False,
     )
     print(f"   Calculated shaft width: {lift1.shaft_width}mm")
-    print(f"   (2 × {lift1.mra_car_bracket_width} car brackets + {lift1.unfinished_car_width} car)")
+    print(f"   (2 Ã— {lift1.mra_car_bracket_width} car brackets + {lift1.unfinished_car_width} car)")
     print(f"   Calculated shaft depth: {sketch1.shaft_depth}mm")
     print(f"   Saved: {path1}")
 
@@ -605,7 +611,7 @@ def generate_mra_samples(output_dir: Path) -> None:
         show_lift_doors=True,
         show_capacity=False,
     )
-    print(f"   Separator type: {sketch3._separator_type}")
+    print(f"   Separator type: {sketch3._separator_types}")
     print(f"   Total width: {sketch3.total_width}mm")
     print(f"   Saved: {path3}")
 
@@ -616,7 +622,7 @@ def generate_mra_samples(output_dir: Path) -> None:
         lift_type="fire",
         finished_car_width=1400,
         finished_car_depth=2400,
-        door_width=1100,
+        door_width=1200,  # Fire lift minimum door width
         structural_opening_width=1300,
     )
     sketch4 = LiftShaftSketch(
@@ -641,7 +647,7 @@ def generate_mra_samples(output_dir: Path) -> None:
         lift_type="fire",
         finished_car_width=1400,
         finished_car_depth=2400,
-        door_width=1100,
+        door_width=1200,  # Fire lift minimum door width
         structural_opening_width=1300,
     )
     lift5b = LiftConfig(
@@ -667,7 +673,7 @@ def generate_mra_samples(output_dir: Path) -> None:
         show_lift_doors=True,
         show_capacity=False,
     )
-    print(f"   Separator type: {sketch5._separator_type}")
+    print(f"   Separator type: {sketch5._separator_types}")
     print(f"   Saved: {path5}")
 
     # Example 6: MRA facing banks (2+2 symmetric)
@@ -741,7 +747,7 @@ def generate_mra_samples(output_dir: Path) -> None:
             lift_type="fire",
             finished_car_width=1400,
             finished_car_depth=2400,
-            door_width=1100,
+            door_width=1200,  # Fire lift minimum door width
             structural_opening_width=1300,
         ),
         LiftConfig(
@@ -821,7 +827,7 @@ def generate_mra_samples(output_dir: Path) -> None:
     )
     print(f"  Finished car: {sample_lift.finished_car_width}mm x {sample_lift.finished_car_depth}mm")
     print(f"  Unfinished car: {sample_lift.unfinished_car_width}mm x {sample_lift.unfinished_car_depth}mm")
-    print(f"  Shaft width = 2 × CarBracket({sample_lift.mra_car_bracket_width}) + Car({sample_lift.unfinished_car_width})")
+    print(f"  Shaft width = 2 Ã— CarBracket({sample_lift.mra_car_bracket_width}) + Car({sample_lift.unfinished_car_width})")
     print(f"             = {sample_lift.shaft_width}mm")
     print(f"  CW bracket depth: {sample_lift.mra_cw_bracket_depth}mm (at top of shaft)")
 
@@ -906,7 +912,7 @@ def generate_section_mrl_samples(output_dir: Path) -> None:
     # Example 4: Section without break lines (shows full detail)
     print("\n4. Section view without break lines...")
     section4 = LiftSectionSketch(
-        shaft_width=2600,
+        shaft_depth=2600,
         wall_thickness=200,
     )
     path4 = section4.generate(
@@ -919,7 +925,7 @@ def generate_section_mrl_samples(output_dir: Path) -> None:
     # Example 5: Schematic section (minimal details)
     print("\n5. Schematic section view (minimal details)...")
     section5 = LiftSectionSketch(
-        shaft_width=2400,
+        shaft_depth=2400,
         wall_thickness=200,
     )
     path5 = section5.generate(
@@ -974,7 +980,7 @@ def generate_section_mrl_samples(output_dir: Path) -> None:
     # Example 8: Section as bytes (API usage)
     print("\n8. Section view as bytes (API usage)...")
     section8 = LiftSectionSketch(
-        shaft_width=2600,
+        shaft_depth=2600,
         wall_thickness=200,
     )
     png_bytes = section8.to_bytes(
@@ -1182,6 +1188,119 @@ def generate_section_mra_samples(output_dir: Path) -> None:
     print(f"  Total shaft height: {default_section.total_shaft_height}mm")
 
 
+def generate_matrix_samples(output_dir: Path) -> bool:
+    """
+    Smoke-test matrix: render every supported plan combination and report
+    PASS/FAIL per case. Outputs land in output/matrix/. Returns True when
+    every case succeeded (main() turns this into the exit code).
+    """
+    matrix_dir = output_dir / "matrix"
+    matrix_dir.mkdir(parents=True, exist_ok=True)
+
+    def passenger(machine="mrl", depth=1600, **kw):
+        base = dict(
+            lift_type="passenger",
+            lift_capacity=1350,
+            finished_car_width=1900,
+            finished_car_depth=depth,
+            door_width=1100,
+            structural_opening_width=1300,
+        )
+        if machine == "mra":
+            base["lift_machine_type"] = "mra"
+        else:
+            base.update(counterweight_bracket_width=625, car_bracket_width=375)
+        base.update(kw)
+        return LiftConfig(**base)
+
+    def fire(machine="mrl", **kw):
+        base = dict(
+            lift_type="fire",
+            lift_capacity=1800,
+            finished_car_width=1500,  # Valid fire cabin: 1500x2300
+            finished_car_depth=2300,
+            counterweight_bracket_width=625,
+            car_bracket_width=375,
+            door_width=1200,  # Fire lift minimum door width
+            structural_opening_width=1400,
+        )
+        if machine == "mra":
+            base["lift_machine_type"] = "mra"
+        base.update(kw)
+        return LiftConfig(**base)
+
+    # (name, sketch builder) — builders create fresh configs per case
+    cases = []
+    for m in ("mrl", "mra"):
+        cases += [
+            (f"{m}_single_passenger",
+             lambda m=m: LiftShaftSketch(lifts=[passenger(m)])),
+            (f"{m}_single_passenger_override",
+             lambda m=m: LiftShaftSketch(lifts=[passenger(
+                 m, shaft_width_override=3400, shaft_depth_override=2800)])),
+            (f"{m}_single_fire",
+             lambda m=m: LiftShaftSketch(lifts=[fire(m)])),
+            (f"{m}_single_fire_double_entrance",
+             lambda m=m: LiftShaftSketch(lifts=[fire(m, double_entrance=True)])),
+            (f"{m}_bank2_passenger",
+             lambda m=m: LiftShaftSketch(
+                 lifts=[passenger(m), passenger(m)], wall_thickness=200)),
+            (f"{m}_bank2_common_steel",
+             lambda m=m: LiftShaftSketch(
+                 lifts=[passenger(m), passenger(m)],
+                 is_common_shaft=True, wall_thickness=200)),
+            (f"{m}_bank2_diff_depth",
+             lambda m=m: LiftShaftSketch(
+                 lifts=[passenger(m), passenger(m, depth=2000)],
+                 wall_thickness=200)),
+            (f"{m}_bank3_fire_first_common",
+             lambda m=m: LiftShaftSketch(
+                 lifts=[fire(m), passenger(m), passenger(m)],
+                 is_common_shaft=True, wall_thickness=200)),
+            (f"{m}_bank4_passenger",
+             lambda m=m: LiftShaftSketch(
+                 lifts=[passenger(m) for _ in range(4)], wall_thickness=200)),
+            (f"{m}_facing_1x1",
+             lambda m=m: LiftShaftSketch(
+                 lifts=[passenger(m)], lifts_bank2=[passenger(m)],
+                 wall_thickness=200)),
+            (f"{m}_facing_2x2",
+             lambda m=m: LiftShaftSketch(
+                 lifts=[passenger(m), passenger(m)],
+                 lifts_bank2=[passenger(m), passenger(m)],
+                 wall_thickness=200)),
+            (f"{m}_facing_3x2_fire",
+             lambda m=m: LiftShaftSketch(
+                 lifts=[fire(m), passenger(m), passenger(m)],
+                 lifts_bank2=[passenger(m), passenger(m)],
+                 wall_thickness=200)),
+        ]
+    # Mixed machine types in one bank
+    cases.append(("mixed_bank2_mrl_mra",
+                  lambda: LiftShaftSketch(
+                      lifts=[passenger("mrl"), passenger("mra")],
+                      wall_thickness=200)))
+
+    print("Matrix smoke test: rendering all plan combinations...")
+    print("=" * 60)
+    failures = []
+    for name, build in cases:
+        try:
+            build().generate(matrix_dir / f"{name}.png",
+                             title=name.replace("_", " ").upper())
+            print(f"  PASS  {name}")
+        except Exception as exc:  # noqa: BLE001 — report every broken combo
+            failures.append((name, exc))
+            print(f"  FAIL  {name}: {exc}")
+
+    print("=" * 60)
+    print(f"{len(cases) - len(failures)}/{len(cases)} combinations passed; "
+          f"PNGs in {matrix_dir}")
+    for name, exc in failures:
+        print(f"  FAILED: {name}: {exc}")
+    return not failures
+
+
 def main():
     """Main entry point with CLI argument parsing."""
     parser = argparse.ArgumentParser(
@@ -1207,9 +1326,11 @@ Examples:
     )
     parser.add_argument(
         "--view",
-        choices=["plan", "section-mrl", "section-mra", "all"],
+        choices=["plan", "section-mrl", "section-mra", "all", "matrix"],
         default="plan",
-        help="View type: plan (top-down), section-mrl (MRL cross-sectional), section-mra (MRA cross-sectional), or all"
+        help="View type: plan (top-down), section-mrl (MRL cross-sectional), "
+             "section-mra (MRA cross-sectional), all, or matrix "
+             "(smoke-test every plan combination, exit 1 on any failure)"
     )
     args = parser.parse_args()
 
@@ -1218,7 +1339,9 @@ Examples:
     output_dir.mkdir(exist_ok=True)
 
     # Generate samples based on view type and machine type
-    if args.view == "section-mrl":
+    if args.view == "matrix":
+        sys.exit(0 if generate_matrix_samples(output_dir) else 1)
+    elif args.view == "section-mrl":
         generate_section_mrl_samples(output_dir)
     elif args.view == "section-mra":
         generate_section_mra_samples(output_dir)

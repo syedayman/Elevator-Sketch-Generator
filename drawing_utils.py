@@ -164,6 +164,7 @@ def draw_dimension_line(
     text: str,
     offset: float = None,
     orientation: str = "horizontal",
+    ext_clip: float = None,
 ) -> None:
     """
     Draw a dimension line with arrows and text centered on the line.
@@ -176,6 +177,9 @@ def draw_dimension_line(
         text: Dimension text (e.g., "2950")
         offset: Offset from the object being measured
         orientation: "horizontal" or "vertical"
+        ext_clip: If given, extension lines start at this coordinate (y for
+            horizontal, x for vertical) instead of the measured object edge.
+            Used to keep extension lines outside the shaft walls.
     """
     if offset is None:
         offset = config.DIMENSION_OFFSET
@@ -197,15 +201,18 @@ def draw_dimension_line(
         # Dimension line is horizontal, offset in y direction
         dim_y = y1 + offset
 
-        # Extension lines (from object edge past dimension line)
+        # Extension lines (from object edge past dimension line, or from
+        # ext_clip so they stay outside the shaft walls)
+        ext_y1 = y1 if ext_clip is None else ext_clip
+        ext_y2 = y2 if ext_clip is None else ext_clip
         ax.plot(
-            [x1, x1], [y1, dim_y + np.sign(offset) * config.DIMENSION_EXTENSION],
+            [x1, x1], [ext_y1, dim_y + np.sign(offset) * config.DIMENSION_EXTENSION],
             color=config.DIMENSION_COLOR,
             linewidth=config.DIMENSION_LINE_WIDTH,
             zorder=5,
         )
         ax.plot(
-            [x2, x2], [y2, dim_y + np.sign(offset) * config.DIMENSION_EXTENSION],
+            [x2, x2], [ext_y2, dim_y + np.sign(offset) * config.DIMENSION_EXTENSION],
             color=config.DIMENSION_COLOR,
             linewidth=config.DIMENSION_LINE_WIDTH,
             zorder=5,
@@ -254,15 +261,18 @@ def draw_dimension_line(
         # Dimension line is vertical, offset in x direction
         dim_x = x1 + offset
 
-        # Extension lines
+        # Extension lines (from object edge, or from ext_clip so they stay
+        # outside the shaft walls)
+        ext_x1 = x1 if ext_clip is None else ext_clip
+        ext_x2 = x2 if ext_clip is None else ext_clip
         ax.plot(
-            [x1, dim_x + np.sign(offset) * config.DIMENSION_EXTENSION], [y1, y1],
+            [ext_x1, dim_x + np.sign(offset) * config.DIMENSION_EXTENSION], [y1, y1],
             color=config.DIMENSION_COLOR,
             linewidth=config.DIMENSION_LINE_WIDTH,
             zorder=5,
         )
         ax.plot(
-            [x2, dim_x + np.sign(offset) * config.DIMENSION_EXTENSION], [y2, y2],
+            [ext_x2, dim_x + np.sign(offset) * config.DIMENSION_EXTENSION], [y2, y2],
             color=config.DIMENSION_COLOR,
             linewidth=config.DIMENSION_LINE_WIDTH,
             zorder=5,
@@ -557,8 +567,11 @@ def draw_counterweight_bracket(
     frame_thickness = config.CW_FRAME_THICKNESS  # 50mm
     box_width = full_box_width - frame_thickness  # Shorter since no wall-side bar
 
-    # Centered horizontally within the bracket zone
-    box_x = x + (width - box_width) / 2
+    # Flush against the shaft wall (open frame side faces the wall)
+    if align == "left":
+        box_x = x
+    else:  # right
+        box_x = x + width - box_width
     box_y = y + (height - box_height) / 2
 
     frame_color = config.CW_FRAME_COLOR
@@ -1539,7 +1552,7 @@ def draw_counterweight_bracket_top(
         zorder=3,
     ))
 
-    # Black inverted-L wall brackets (side = -1 left, +1 right)
+    # Outline-only inverted-L wall brackets (side = -1 left, +1 right)
     arm_under_y = wall_inner_y + direction * arm_thickness
     column_end_y = wall_inner_y + direction * bracket_extent
     for side in (-1.0, 1.0):
@@ -1556,10 +1569,40 @@ def draw_counterweight_bracket_top(
                 (column_inner_x, column_end_y),
             ],
             closed=True,
-            facecolor=config.MRA_CW_BRACKET_COLOR,
+            facecolor="none",
             edgecolor=config.BRACKET_EDGE_COLOR,
             linewidth=config.BRACKET_EDGE_WIDTH,
             zorder=3,
+        ))
+
+    # CW guide rails on the bracket inner faces: black bar flat against the
+    # bracket, stem pointing at the CW box (no base plate, parts inverted
+    # relative to the car rail symbol)
+    bar_thickness = config.GUIDE_RAIL_BAR_THICKNESS
+    bar_height = config.GUIDE_RAIL_BAR_HEIGHT
+    stem_length = config.GUIDE_RAIL_STEM_LENGTH
+    stem_thickness = config.GUIDE_RAIL_STEM_THICKNESS
+    rail_y = (box_near_y + box_far_y) / 2
+    for side in (-1.0, 1.0):
+        column_inner_x = center_x + side * (box_width / 2 + clearance)
+        inner_dir = -side  # Toward the CW box
+        bar_tip_x = column_inner_x + inner_dir * bar_thickness
+        ax.add_patch(Rectangle(
+            (min(column_inner_x, bar_tip_x), rail_y - bar_height / 2),
+            bar_thickness,
+            bar_height,
+            facecolor=config.GUIDE_RAIL_T_COLOR,
+            edgecolor="none",
+            zorder=8,
+        ))
+        stem_tip_x = bar_tip_x + inner_dir * stem_length
+        ax.add_patch(Rectangle(
+            (min(bar_tip_x, stem_tip_x), rail_y - stem_thickness / 2),
+            stem_length,
+            stem_thickness,
+            facecolor=config.GUIDE_RAIL_T_COLOR,
+            edgecolor="none",
+            zorder=8,
         ))
 
 

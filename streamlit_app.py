@@ -1014,13 +1014,33 @@ def render_lift_config_form(
 
         # Shaft Dimensions
         st.markdown("**Shaft Dimensions**")
+        mrl_style = machine_type == "mrl" or L["double_entrance"] or L["type"] == "fire"
+        if mrl_style:
+            width_formula = ("Min = CWT Bracket Spacing + Unfinished Car Width "
+                             "(finished + 50) + Car Bracket Spacing")
+            if is_fire:
+                width_formula += ". Fire lifts: at least 2700 (2925 with telescopic doors)."
+        else:
+            width_formula = ("Min = Left Car Bracket Spacing + Unfinished Car Width "
+                             "(finished + 50) + Right Car Bracket Spacing")
+        if L["double_entrance"]:
+            depth_formula = ("Auto-computed: Door Zone + Finished Car Depth + Door Zone, "
+                             "where Door Zone = 2 x Door Panel + Door Gap")
+        elif mrl_style:
+            depth_formula = ("Min = Unfinished Car Depth (finished + 25) + "
+                             "2 x Door Panel + Door Gap + Rear Clearance (200)")
+        else:
+            depth_formula = ("Min = 2 x Door Panel + Door Gap + Unfinished Car Depth "
+                             "(finished + 25) + CWT Gap + CWT Bracket Spacing + "
+                             "CWT Wall Gap")
         c1, c2 = st.columns(2)
         with c1:
-            _num("shaft_width", "Shaft Width (mm)", step=10, on_change=_cb_shaft_width)
+            _num("shaft_width", "Shaft Width (mm)", step=10, on_change=_cb_shaft_width,
+                 help=width_formula)
         with c2:
             _num("shaft_depth", "Shaft Depth (mm)", step=10, on_change=_cb_shaft_depth,
                  disabled=bool(L["double_entrance"]),
-                 help="Auto-computed for double entrance" if L["double_entrance"] else None)
+                 help=depth_formula)
 
         # Capacity (conditional)
         if show_capacity_input:
@@ -1049,53 +1069,53 @@ def render_lift_config_form(
             with cc2:
                 _num("depth", "Car Depth (mm)", step=10, on_change=_store("depth"))
 
-        # Bracket Spaces — always editable, zero-sum, max(0, .) only
-        st.markdown("**Bracket Spaces**")
+        # Shaft Spacing — always editable, zero-sum, max(0, .) only
+        st.markdown("**Shaft Spacing**")
         if machine_type == "mrl" or L["double_entrance"] or L["type"] == "fire":
             bc1, bc2 = st.columns(2)
             with bc1:
-                _num("cw_bracket_width", "CW Bracket Width (mm)", step=25,
+                _num("cw_bracket_width", "CWT Bracket Spacing (mm)", step=25,
                      on_change=_cb_cw, help="Car bracket auto-adjusts.",
                      seed=L["cw_bracket_width"] if L["cw_bracket_width"] is not None else MRL_CW_BRACKET_MIN)
             with bc2:
-                _num("car_bracket_width", "Car Bracket Width (mm)", step=25,
-                     on_change=_cb_car, help="CW bracket auto-adjusts.",
+                _num("car_bracket_width", "Car Bracket Spacing (mm)", step=25,
+                     on_change=_cb_car, help="CWT bracket auto-adjusts.",
                      seed=L["car_bracket_width"] if L["car_bracket_width"] is not None else MRL_CAR_BRACKET_MIN)
         else:
             st.caption("Width")
             wc1, wc2 = st.columns(2)
             with wc1:
-                _num("mra_left_bracket", "Left Car Bracket (mm)", step=25,
+                _num("mra_left_bracket", "Left Car Bracket Spacing (mm)", step=25,
                      on_change=_cb_mra_left,
                      seed=L["mra_left_bracket"] if L["mra_left_bracket"] is not None else MRA_CAR_BRACKET_MIN)
             with wc2:
-                _num("mra_right_bracket", "Right Car Bracket (mm)", step=25,
+                _num("mra_right_bracket", "Right Car Bracket Spacing (mm)", step=25,
                      on_change=_cb_mra_right,
                      seed=L["mra_right_bracket"] if L["mra_right_bracket"] is not None else MRA_CAR_BRACKET_MIN)
             st.caption("Depth")
             dc1, dc2 = st.columns(2)
             with dc1:
-                _num("mra_cw_bracket_depth", "CW Bracket Depth (mm)", step=25,
+                _num("mra_cw_bracket_depth", "CWT Bracket Spacing (mm)", step=25,
                      on_change=_cb_mra_cwd,
                      seed=L["mra_cw_bracket_depth"] if L["mra_cw_bracket_depth"] is not None else MRA_CW_BRACKET_DEPTH_MIN)
             with dc2:
-                _num("mra_cw_gap", "CW Gap (mm)", step=25,
+                _num("mra_cw_gap", "CWT Gap (mm)", step=25,
                      on_change=_cb_mra_gap,
                      seed=L["mra_cw_gap"] if L["mra_cw_gap"] is not None else MRA_CW_GAP_MIN)
-            _num("mra_cw_wall_gap", "CW Wall Gap (mm)", step=25,
+            _num("mra_cw_wall_gap", "CWT Wall Gap (mm)", step=25,
                  on_change=_cb_mra_wall_gap,
-                 help="Space between rear wall and CW box. CW gap auto-adjusts.",
+                 help="Space between rear wall and CWT box. CWT gap auto-adjusts.",
                  seed=L["mra_cw_wall_gap"] if L["mra_cw_wall_gap"] is not None else MRA_CW_WALL_GAP_MIN)
 
         # Car guide rails (decoupled from brackets; arrow shows bracket + rail)
         rc1, rc2 = st.columns(2)
         with rc1:
-            _num("rail_width_left", "Left Rail Width (mm)", step=5,
+            _num("rail_width_left", "Left Rail Spacing (mm)", step=5,
                  on_change=_cb_rail_left,
                  help="Bracket on this side auto-adjusts; arrow shows bracket + rail.",
                  seed=L.get("rail_width_left") if L.get("rail_width_left") is not None else RAIL_WIDTH_DEFAULT)
         with rc2:
-            _num("rail_width_right", "Right Rail Width (mm)", step=5,
+            _num("rail_width_right", "Right Rail Spacing (mm)", step=5,
                  on_change=_cb_rail_right,
                  help="Bracket on this side auto-adjusts.",
                  seed=L.get("rail_width_right") if L.get("rail_width_right") is not None else RAIL_WIDTH_DEFAULT)
@@ -1104,17 +1124,17 @@ def render_lift_config_form(
         if machine_type == "mrl" or L["double_entrance"] or L["type"] == "fire":
             cwb1, cwb2 = st.columns(2)
             with cwb1:
-                _num("cw_box_width", "CW Box Width (mm)", step=25,
+                _num("cw_box_width", "CWT Box Width (mm)", step=25,
                      on_change=_store("cw_box_width"),
                      seed=L.get("cw_box_width") if L.get("cw_box_width") is not None else CW_BOX_WIDTH_DEFAULT)
             with cwb2:
-                _num("cw_box_depth", "CW Box Depth (mm)", step=25,
+                _num("cw_box_depth", "CWT Box Depth (mm)", step=25,
                      on_change=_store("cw_box_depth"),
                      seed=L.get("cw_box_depth") if L.get("cw_box_depth") is not None else CW_BOX_DEPTH_DEFAULT)
         else:
-            _num("mra_cw_box_width", "CW Box Width (mm)", step=25,
+            _num("mra_cw_box_width", "CWT Box Spacing (mm)", step=25,
                  on_change=_store("mra_cw_box_width"),
-                 help="Width of the rear CW box (depth = CW Bracket Depth).",
+                 help="Width of the rear CWT box (depth = CWT Bracket Spacing).",
                  seed=L.get("mra_cw_box_width") if L.get("mra_cw_box_width") is not None else MRA_CW_BOX_WIDTH_DEFAULT)
 
         # Door Settings
