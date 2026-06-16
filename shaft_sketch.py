@@ -33,6 +33,8 @@ try:
         draw_door_jambs,
         draw_counterweight_bracket_top,
         draw_car_brackets_mra,
+        add_image_border,
+        scaled_dimension_font,
     )
 except ImportError:
     import config
@@ -54,6 +56,8 @@ except ImportError:
         draw_door_jambs,
         draw_counterweight_bracket_top,
         draw_car_brackets_mra,
+        add_image_border,
+        scaled_dimension_font,
     )
 
 
@@ -570,6 +574,7 @@ class LiftShaftSketch:
         title: str = None,
         subtitle: Optional[str] = None,
         dpi: int = None,
+        font_scale: float = 1.0,
     ) -> str:
         """
         Generate the sketch and save to file.
@@ -605,20 +610,25 @@ class LiftShaftSketch:
         }
 
         fig, ax = self._create_figure()
-        self._draw_sketch(ax, title, subtitle, display_options)
+        with scaled_dimension_font(font_scale):
+            self._draw_sketch(ax, title, subtitle, display_options)
 
         # Save to file
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
+        buf = io.BytesIO()
         fig.savefig(
-            output_path,
+            buf,
+            format="png",
             dpi=dpi or config.DEFAULT_DPI,
             bbox_inches="tight",
             facecolor="white",
             edgecolor="none",
         )
         plt.close(fig)
+
+        output_path.write_bytes(add_image_border(buf.getvalue()))
 
         return str(output_path.absolute())
 
@@ -636,6 +646,7 @@ class LiftShaftSketch:
         title: str = None,
         subtitle: Optional[str] = None,
         dpi: int = None,
+        font_scale: float = 1.0,
     ) -> bytes:
         """
         Return PNG as bytes (for API responses).
@@ -670,7 +681,8 @@ class LiftShaftSketch:
         }
 
         fig, ax = self._create_figure()
-        self._draw_sketch(ax, title, subtitle, display_options)
+        with scaled_dimension_font(font_scale):
+            self._draw_sketch(ax, title, subtitle, display_options)
 
         # Save to bytes buffer
         buf = io.BytesIO()
@@ -684,8 +696,7 @@ class LiftShaftSketch:
         )
         plt.close(fig)
 
-        buf.seek(0)
-        return buf.read()
+        return add_image_border(buf.getvalue())
 
     def _create_figure(self) -> tuple:
         """Create matplotlib figure and axes."""
@@ -918,6 +929,7 @@ class LiftShaftSketch:
                     door_opening_type=lift_config.door_opening_type,
                     telescopic_left_ext=lift_config.telescopic_left_ext,
                     telescopic_right_ext=lift_config.telescopic_right_ext,
+                    match_front_telescopic=True,
                 )
 
         # Draw counterweight bracket only (car bracket not shown)
@@ -1101,6 +1113,7 @@ class LiftShaftSketch:
                     door_opening_type=lift_config.door_opening_type,
                     telescopic_left_ext=lift_config.telescopic_left_ext,
                     telescopic_right_ext=lift_config.telescopic_right_ext,
+                    match_front_telescopic=True,
                 )
 
         # Position car so bottom touches top of car door (like MRL)
@@ -1323,6 +1336,28 @@ class LiftShaftSketch:
             color=config.DIMENSION_COLOR,
         )
 
+        # Header-wall widths flanking the structural opening (bottom, door-width row).
+        # HW1 = left inner shaft wall -> opening; HW2 = opening -> right inner shaft wall.
+        shaft_right_inner = wt + sw
+        hw1 = opening_x - wt
+        hw2 = shaft_right_inner - (opening_x + sow)
+        draw_dimension_line(
+            ax,
+            start=(wt, 0),
+            end=(opening_x, 0),
+            text=f"HW1 {int(hw1)}",
+            offset=-150,
+            orientation="horizontal",
+        )
+        draw_dimension_line(
+            ax,
+            start=(opening_x + sow, 0),
+            end=(shaft_right_inner, 0),
+            text=f"HW2 {int(hw2)}",
+            offset=-150,
+            orientation="horizontal",
+        )
+
         # Draw bracket and car dimensions if using enhanced API
         if self._use_enhanced_api and self.lifts:
             lift = self.lifts[0]
@@ -1362,7 +1397,7 @@ class LiftShaftSketch:
 
             if lift.mra_rear_cw:
                 # MRA: Dynamic left bracket (shaft wall to car left edge)
-                # Drawn at bottom, same row as door width
+                # Top, same row as Unfinished Car Width
                 shaft_left_wall = wt
                 left_cb = lift.mra_car_bracket_width
                 right_cb = lift.mra_right_bracket_width
@@ -1371,11 +1406,12 @@ class LiftShaftSketch:
                 left_gap = car_left_edge - shaft_left_wall
                 draw_dimension_line(
                     ax,
-                    start=(shaft_left_wall, 0),
-                    end=(car_left_edge, 0),
+                    start=(shaft_left_wall, shaft_top_y),
+                    end=(car_left_edge, shaft_top_y),
                     text=f"{int(left_gap)}",
-                    offset=-150,
+                    offset=level2_target_y - shaft_top_y,
                     orientation="horizontal",
+                    ext_clip=shaft_top_y + wt,  # Outer top face
                 )
 
                 # MRA: Dynamic right bracket (car right edge to shaft wall)
@@ -1384,36 +1420,39 @@ class LiftShaftSketch:
                 right_gap = shaft_right_wall - car_right_edge
                 draw_dimension_line(
                     ax,
-                    start=(car_right_edge, 0),
-                    end=(shaft_right_wall, 0),
+                    start=(car_right_edge, shaft_top_y),
+                    end=(shaft_right_wall, shaft_top_y),
                     text=f"{int(right_gap)}",
-                    offset=-150,
+                    offset=level2_target_y - shaft_top_y,
                     orientation="horizontal",
+                    ext_clip=shaft_top_y + wt,  # Outer top face
                 )
             else:
                 # MRL, or MRA + double_entrance: Counterweight bracket width
-                # Drawn at bottom, same row as door width
+                # Top, same row as Unfinished Car Width
                 draw_dimension_line(
                     ax,
-                    start=(wt, 0),
-                    end=(wt + lift.counterweight_bracket_width, 0),
+                    start=(wt, shaft_top_y),
+                    end=(wt + lift.counterweight_bracket_width, shaft_top_y),
                     text=f"{int(lift.counterweight_bracket_width)}",
-                    offset=-150,
+                    offset=level2_target_y - shaft_top_y,
                     orientation="horizontal",
+                    ext_clip=shaft_top_y + wt,  # Outer top face
                 )
 
-                # MRL: Car bracket width (bottom, same row as door width)
+                # MRL: Car bracket width (top, same row as Unfinished Car Width)
                 # Dimension from unfinished car right edge to shaft wall
                 car_right_edge = wt + lift.counterweight_bracket_width + lift.unfinished_car_width
                 shaft_wall_x = wt + lift.shaft_width
                 bracket_gap = shaft_wall_x - car_right_edge
                 draw_dimension_line(
                     ax,
-                    start=(car_right_edge, 0),
-                    end=(shaft_wall_x, 0),
+                    start=(car_right_edge, shaft_top_y),
+                    end=(shaft_wall_x, shaft_top_y),
                     text=f"{int(bracket_gap)}",
-                    offset=-150,
+                    offset=level2_target_y - shaft_top_y,
                     orientation="horizontal",
+                    ext_clip=shaft_top_y + wt,  # Outer top face
                 )
 
             # Finished car width (top, level 1 - closest to drawing)
@@ -1776,6 +1815,28 @@ class LiftShaftSketch:
                 color=config.DIMENSION_COLOR,
             )
 
+            # Header-wall widths flanking the structural opening (bottom, door-width row).
+            # HW1 = left inner shaft wall -> opening; HW2 = opening -> right inner shaft wall.
+            shaft_right_inner = shaft_left + sw
+            hw1 = opening_x - shaft_left
+            hw2 = shaft_right_inner - (opening_x + sow)
+            draw_dimension_line(
+                ax,
+                start=(shaft_left, 0),
+                end=(opening_x, 0),
+                text=f"HW1 {int(hw1)}",
+                offset=-150,
+                orientation="horizontal",
+            )
+            draw_dimension_line(
+                ax,
+                start=(opening_x + sow, 0),
+                end=(shaft_right_inner, 0),
+                text=f"HW2 {int(hw2)}",
+                offset=-150,
+                orientation="horizontal",
+            )
+
             # Car WIDTH dimensions for each lift (brackets and car widths)
             if lift:
                 # MRA side-CW lifts (double entrance / fire) never mirror
@@ -1817,7 +1878,7 @@ class LiftShaftSketch:
 
                 if lift.mra_rear_cw:
                     # MRA: Dynamic left bracket (shaft wall to car left edge)
-                    # Drawn at bottom, same row as door width
+                    # Top, same row as Unfinished Car Width
                     left_cb = lift.mra_car_bracket_width
                     right_cb = lift.mra_right_bracket_width
                     available_w = lift.shaft_width - left_cb - right_cb
@@ -1825,11 +1886,12 @@ class LiftShaftSketch:
                     left_gap = car_left_edge - shaft_left
                     draw_dimension_line(
                         ax,
-                        start=(shaft_left, 0),
-                        end=(car_left_edge, 0),
+                        start=(shaft_left, shaft_top_y),
+                        end=(car_left_edge, shaft_top_y),
                         text=f"{int(left_gap)}",
-                        offset=-150,
+                        offset=level2_target_y - shaft_top_y,
                         orientation="horizontal",
+                        ext_clip=sd + 2 * wt,  # This lift's outer top face
                     )
 
                     # MRA: Dynamic right bracket (car right edge to shaft wall)
@@ -1838,11 +1900,12 @@ class LiftShaftSketch:
                     right_gap = shaft_wall_x - car_right_edge
                     draw_dimension_line(
                         ax,
-                        start=(car_right_edge, 0),
-                        end=(shaft_wall_x, 0),
+                        start=(car_right_edge, shaft_top_y),
+                        end=(shaft_wall_x, shaft_top_y),
                         text=f"{int(right_gap)}",
-                        offset=-150,
+                        offset=level2_target_y - shaft_top_y,
                         orientation="horizontal",
+                        ext_clip=sd + 2 * wt,  # This lift's outer top face
                     )
                 else:
                     # MRL, or MRA + double_entrance: bracket positions depend on mirror state
@@ -1853,28 +1916,30 @@ class LiftShaftSketch:
                         # Mirrored: car bracket on left, CW bracket on right
                         left_bracket_width = lift.car_bracket_width
 
-                    # Left bracket width (bottom, same row as door width)
+                    # Left bracket width (top, same row as Unfinished Car Width)
                     draw_dimension_line(
                         ax,
-                        start=(shaft_left, 0),
-                        end=(shaft_left + left_bracket_width, 0),
+                        start=(shaft_left, shaft_top_y),
+                        end=(shaft_left + left_bracket_width, shaft_top_y),
                         text=f"{int(left_bracket_width)}",
-                        offset=-150,
+                        offset=level2_target_y - shaft_top_y,
                         orientation="horizontal",
+                        ext_clip=sd + 2 * wt,  # This lift's outer top face
                     )
 
-                    # Right bracket width (bottom, same row as door width)
+                    # Right bracket width (top, same row as Unfinished Car Width)
                     # Dynamic: measure from unfinished car right edge to shaft wall
                     car_right_edge = shaft_left + left_bracket_width + lift.unfinished_car_width
                     shaft_wall_x = shaft_left + sw
                     right_gap = shaft_wall_x - car_right_edge
                     draw_dimension_line(
                         ax,
-                        start=(car_right_edge, 0),
-                        end=(shaft_wall_x, 0),
+                        start=(car_right_edge, shaft_top_y),
+                        end=(shaft_wall_x, shaft_top_y),
                         text=f"{int(right_gap)}",
-                        offset=-150,
+                        offset=level2_target_y - shaft_top_y,
                         orientation="horizontal",
+                        ext_clip=sd + 2 * wt,  # This lift's outer top face
                     )
 
                 # Finished car width (top, level 1 - closest to drawing)
@@ -2498,6 +2563,7 @@ class LiftShaftSketch:
                     door_opening_type=lift_config.door_opening_type,
                     telescopic_left_ext=lift_config.telescopic_left_ext,
                     telescopic_right_ext=lift_config.telescopic_right_ext,
+                    match_front_telescopic=True,
                 )
 
         # Draw counterweight bracket
@@ -2672,6 +2738,7 @@ class LiftShaftSketch:
                     door_opening_type=lift_config.door_opening_type,
                     telescopic_left_ext=lift_config.telescopic_left_ext,
                     telescopic_right_ext=lift_config.telescopic_right_ext,
+                    match_front_telescopic=True,
                 )
 
         # Draw brackets
@@ -2920,7 +2987,7 @@ class LiftShaftSketch:
                     ext_clip=base_y + 2 * wt + sd,  # This lift's outer top face
                 )
 
-                # Bracket widths (front wall side, same row as door width)
+                # Bracket widths (top / shaft-wall side, same row as Unfinished Car Width)
                 if lift.mra_rear_cw:
                     # MRA: Dynamic left bracket (shaft wall to car left edge)
                     left_cb = lift.mra_car_bracket_width
@@ -2930,11 +2997,12 @@ class LiftShaftSketch:
                     left_gap = car_left_edge - shaft_left
                     draw_dimension_line(
                         ax,
-                        start=(shaft_left, front_wall_y),
-                        end=(car_left_edge, front_wall_y),
+                        start=(shaft_left, shaft_top_y),
+                        end=(car_left_edge, shaft_top_y),
                         text=f"{int(left_gap)}",
-                        offset=-150,
+                        offset=level2_offset,
                         orientation="horizontal",
+                        ext_clip=base_y + 2 * wt + sd,  # This lift's outer top face
                     )
                     # MRA: Dynamic right bracket (car right edge to shaft wall)
                     car_right_edge = car_left_edge + lift.unfinished_car_width
@@ -2942,11 +3010,12 @@ class LiftShaftSketch:
                     right_gap = shaft_wall_x - car_right_edge
                     draw_dimension_line(
                         ax,
-                        start=(car_right_edge, front_wall_y),
-                        end=(shaft_wall_x, front_wall_y),
+                        start=(car_right_edge, shaft_top_y),
+                        end=(shaft_wall_x, shaft_top_y),
                         text=f"{int(right_gap)}",
-                        offset=-150,
+                        offset=level2_offset,
                         orientation="horizontal",
+                        ext_clip=base_y + 2 * wt + sd,  # This lift's outer top face
                     )
                 else:
                     # MRL, or MRA + double_entrance: bracket widths
@@ -2957,11 +3026,12 @@ class LiftShaftSketch:
 
                     draw_dimension_line(
                         ax,
-                        start=(shaft_left, front_wall_y),
-                        end=(shaft_left + left_bracket_width, front_wall_y),
+                        start=(shaft_left, shaft_top_y),
+                        end=(shaft_left + left_bracket_width, shaft_top_y),
                         text=f"{int(left_bracket_width)}",
-                        offset=-150,
+                        offset=level2_offset,
                         orientation="horizontal",
+                        ext_clip=base_y + 2 * wt + sd,  # This lift's outer top face
                     )
                     # Dynamic: measure from unfinished car right edge to shaft wall
                     car_right_edge = shaft_left + left_bracket_width + lift.unfinished_car_width
@@ -2969,11 +3039,12 @@ class LiftShaftSketch:
                     right_gap = shaft_wall_x - car_right_edge
                     draw_dimension_line(
                         ax,
-                        start=(car_right_edge, front_wall_y),
-                        end=(shaft_wall_x, front_wall_y),
+                        start=(car_right_edge, shaft_top_y),
+                        end=(shaft_wall_x, shaft_top_y),
                         text=f"{int(right_gap)}",
-                        offset=-150,
+                        offset=level2_offset,
                         orientation="horizontal",
+                        ext_clip=base_y + 2 * wt + sd,  # This lift's outer top face
                     )
 
                 # Finished car width (level 1 - closest to drawing, from actual car edge)
@@ -3027,11 +3098,12 @@ class LiftShaftSketch:
                     left_gap = car_left_edge - shaft_left
                     draw_dimension_line(
                         ax,
-                        start=(shaft_left, front_wall_y + wt),
-                        end=(car_left_edge, front_wall_y + wt),
+                        start=(shaft_left, base_y),
+                        end=(car_left_edge, base_y),
                         text=f"{int(left_gap)}",
-                        offset=150,
+                        offset=-level2_offset,
                         orientation="horizontal",
+                        ext_clip=base_y + (max_shaft_depth - sd),  # This lift's outer bottom face
                     )
                     # MRA: Dynamic right bracket (car right edge to shaft wall)
                     car_right_edge = car_left_edge + lift.unfinished_car_width
@@ -3039,11 +3111,12 @@ class LiftShaftSketch:
                     right_gap = shaft_wall_x - car_right_edge
                     draw_dimension_line(
                         ax,
-                        start=(car_right_edge, front_wall_y + wt),
-                        end=(shaft_wall_x, front_wall_y + wt),
+                        start=(car_right_edge, base_y),
+                        end=(shaft_wall_x, base_y),
                         text=f"{int(right_gap)}",
-                        offset=150,
+                        offset=-level2_offset,
                         orientation="horizontal",
+                        ext_clip=base_y + (max_shaft_depth - sd),  # This lift's outer bottom face
                     )
                 else:
                     if not mirror:
@@ -3053,11 +3126,12 @@ class LiftShaftSketch:
 
                     draw_dimension_line(
                         ax,
-                        start=(shaft_left, front_wall_y + wt),
-                        end=(shaft_left + left_bracket_width, front_wall_y + wt),
+                        start=(shaft_left, base_y),
+                        end=(shaft_left + left_bracket_width, base_y),
                         text=f"{int(left_bracket_width)}",
-                        offset=150,
+                        offset=-level2_offset,
                         orientation="horizontal",
+                        ext_clip=base_y + (max_shaft_depth - sd),  # This lift's outer bottom face
                     )
                     # Dynamic: measure from unfinished car right edge to shaft wall
                     car_right_edge = shaft_left + left_bracket_width + lift.unfinished_car_width
@@ -3065,11 +3139,12 @@ class LiftShaftSketch:
                     right_gap = shaft_wall_x - car_right_edge
                     draw_dimension_line(
                         ax,
-                        start=(car_right_edge, front_wall_y + wt),
-                        end=(shaft_wall_x, front_wall_y + wt),
+                        start=(car_right_edge, base_y),
+                        end=(shaft_wall_x, base_y),
                         text=f"{int(right_gap)}",
-                        offset=150,
+                        offset=-level2_offset,
                         orientation="horizontal",
+                        ext_clip=base_y + (max_shaft_depth - sd),  # This lift's outer bottom face
                     )
 
                 # Finished car width (level 1 - closest to drawing, from actual car edge)
@@ -3145,6 +3220,27 @@ class LiftShaftSketch:
                     fontsize=config.DIMENSION_TEXT_SIZE,
                     color=config.DIMENSION_COLOR,
                 )
+
+                # Header-wall widths flanking the structural opening (door-width row)
+                shaft_right_inner = shaft_left + sw
+                hw1 = opening_x - shaft_left
+                hw2 = shaft_right_inner - (opening_x + sow)
+                draw_dimension_line(
+                    ax,
+                    start=(shaft_left, front_wall_y),
+                    end=(opening_x, front_wall_y),
+                    text=f"HW1 {int(hw1)}",
+                    offset=-150,
+                    orientation="horizontal",
+                )
+                draw_dimension_line(
+                    ax,
+                    start=(opening_x + sow, front_wall_y),
+                    end=(shaft_right_inner, front_wall_y),
+                    text=f"HW2 {int(hw2)}",
+                    offset=-150,
+                    orientation="horizontal",
+                )
             else:
                 # Front wall at top (doors facing up)
                 # Door width (level 1 above front wall)
@@ -3183,6 +3279,27 @@ class LiftShaftSketch:
                     ha="center", va="bottom",
                     fontsize=config.DIMENSION_TEXT_SIZE,
                     color=config.DIMENSION_COLOR,
+                )
+
+                # Header-wall widths flanking the structural opening (door-width row)
+                shaft_right_inner = shaft_left + sw
+                hw1 = opening_x - shaft_left
+                hw2 = shaft_right_inner - (opening_x + sow)
+                draw_dimension_line(
+                    ax,
+                    start=(shaft_left, front_wall_y + wt),
+                    end=(opening_x, front_wall_y + wt),
+                    text=f"HW1 {int(hw1)}",
+                    offset=150,
+                    orientation="horizontal",
+                )
+                draw_dimension_line(
+                    ax,
+                    start=(opening_x + sow, front_wall_y + wt),
+                    end=(shaft_right_inner, front_wall_y + wt),
+                    text=f"HW2 {int(hw2)}",
+                    offset=150,
+                    orientation="horizontal",
                 )
 
             # Move to next shaft

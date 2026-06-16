@@ -27,6 +27,8 @@ try:
         draw_section_landing,
         draw_floor_slab_protrusion,
         draw_machine_image,
+        add_image_border,
+        scaled_dimension_font,
     )
 except ImportError:
     import config
@@ -39,6 +41,8 @@ except ImportError:
         draw_section_landing,
         draw_floor_slab_protrusion,
         draw_machine_image,
+        add_image_border,
+        scaled_dimension_font,
     )
 
 
@@ -193,6 +197,7 @@ class LiftSectionSketch:
         title: str = None,
         subtitle: Optional[str] = None,
         dpi: int = None,
+        font_scale: float = 1.0,
     ) -> str:
         """
         Generate the section sketch and save to file.
@@ -220,20 +225,25 @@ class LiftSectionSketch:
         }
 
         fig, ax = self._create_figure()
-        self._draw_section(ax, title, subtitle, display_options)
+        with scaled_dimension_font(font_scale):
+            self._draw_section(ax, title, subtitle, display_options)
 
         # Save to file
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
+        buf = io.BytesIO()
         fig.savefig(
-            output_path,
+            buf,
+            format="png",
             dpi=dpi or config.DEFAULT_DPI,
             bbox_inches="tight",
             facecolor="white",
             edgecolor="none",
         )
         plt.close(fig)
+
+        output_path.write_bytes(add_image_border(buf.getvalue()))
 
         return str(output_path.absolute())
 
@@ -247,6 +257,7 @@ class LiftSectionSketch:
         title: str = None,
         subtitle: Optional[str] = None,
         dpi: int = None,
+        font_scale: float = 1.0,
     ) -> bytes:
         """
         Return PNG as bytes (for API responses).
@@ -273,7 +284,8 @@ class LiftSectionSketch:
         }
 
         fig, ax = self._create_figure()
-        self._draw_section(ax, title, subtitle, display_options)
+        with scaled_dimension_font(font_scale):
+            self._draw_section(ax, title, subtitle, display_options)
 
         # Save to bytes buffer
         buf = io.BytesIO()
@@ -287,8 +299,7 @@ class LiftSectionSketch:
         )
         plt.close(fig)
 
-        buf.seek(0)
-        return buf.read()
+        return add_image_border(buf.getvalue())
 
     def _create_figure(self) -> tuple:
         """Create matplotlib figure and axes for section view."""

@@ -2,10 +2,14 @@
 Drawing utility functions for lift shaft sketch generation.
 """
 
+import io
+from contextlib import contextmanager
+
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle, FancyArrowPatch, Polygon, Circle
 from matplotlib.lines import Line2D
+from PIL import Image, ImageOps
 from typing import Tuple, Optional, List
 
 # Support both package (relative) and standalone (absolute) imports
@@ -13,6 +17,46 @@ try:
     from . import config
 except ImportError:
     import config
+
+
+@contextmanager
+def scaled_dimension_font(scale: float):
+    """Temporarily scale dimension-label font + arrowhead size for the duration of a draw.
+
+    All dimension text reads config.DIMENSION_TEXT_SIZE directly and draw_dimension_line
+    reads config.DIMENSION_ARROW_MUTATION, so overriding both here scales every dimension
+    label and its arrowheads (draw_dimension_line + inline ax.text) with no per-site
+    plumbing. Originals are always restored. scale=1.0 is a no-op.
+
+    Note: mutates module globals for the render window — fine for this single-user
+    app; concurrent multi-session renders could theoretically interleave.
+    """
+    original_text = config.DIMENSION_TEXT_SIZE
+    original_arrow = config.DIMENSION_ARROW_MUTATION
+    try:
+        config.DIMENSION_TEXT_SIZE = original_text * scale
+        config.DIMENSION_ARROW_MUTATION = original_arrow * scale
+        yield
+    finally:
+        config.DIMENSION_TEXT_SIZE = original_text
+        config.DIMENSION_ARROW_MUTATION = original_arrow
+
+
+def add_image_border(png_bytes: bytes) -> bytes:
+    """Add a white pad + solid frame around a rendered PNG, returning new bytes.
+
+    Applied to final output (file + bytes, plan + section) so every image ships
+    with a border. Sizes/colors come from config.IMAGE_BORDER_*.
+    """
+    img = Image.open(io.BytesIO(png_bytes)).convert("RGB")
+    if config.IMAGE_BORDER_PAD > 0:
+        img = ImageOps.expand(img, border=config.IMAGE_BORDER_PAD, fill=config.IMAGE_BORDER_PAD_COLOR)
+    if config.IMAGE_BORDER_WIDTH > 0:
+        img = ImageOps.expand(img, border=config.IMAGE_BORDER_WIDTH, fill=config.IMAGE_BORDER_COLOR)
+    out = io.BytesIO()
+    img.save(out, format="png")
+    out.seek(0)
+    return out.read()
 
 
 def draw_wall_section(
@@ -230,6 +274,7 @@ def draw_dimension_line(
                     lw=config.DIMENSION_LINE_WIDTH,
                     shrinkA=0,
                     shrinkB=0,
+                    mutation_scale=config.DIMENSION_ARROW_MUTATION,
                 ),
                 zorder=5,
             )
@@ -290,6 +335,7 @@ def draw_dimension_line(
                     lw=config.DIMENSION_LINE_WIDTH,
                     shrinkA=0,
                     shrinkB=0,
+                    mutation_scale=config.DIMENSION_ARROW_MUTATION,
                 ),
                 zorder=5,
             )
@@ -1163,6 +1209,7 @@ def draw_lift_doors(
     door_opening_type: str = "centre",
     telescopic_left_ext: float = None,
     telescopic_right_ext: float = None,
+    match_front_telescopic: bool = False,
 ) -> dict:
     """
     Draw landing door and car door at the bottom of the shaft.
@@ -1226,9 +1273,13 @@ def draw_lift_doors(
 
     # Telescopic: stagger the bold inner rectangle — near-wall door -> left, deeper -> right.
     # (Mirrored Bank-2: the car door is the near-wall one, so the sides swap.)
+    # A double-entrance rear door is positioned with `mirrored` flipped vs its own
+    # front door; match_front_telescopic flips the stagger back so the rear panels
+    # read identically to the front instead of mirroring them.
     _is_telescopic = door_opening_type == "telescopic"
-    landing_side = ("left" if not mirrored else "right") if _is_telescopic else None
-    car_side = ("right" if not mirrored else "left") if _is_telescopic else None
+    _tel_mirrored = (not mirrored) if match_front_telescopic else mirrored
+    landing_side = ("left" if not _tel_mirrored else "right") if _is_telescopic else None
+    car_side = ("right" if not _tel_mirrored else "left") if _is_telescopic else None
 
     # Draw landing door rectangle
     landing_door = Rectangle(

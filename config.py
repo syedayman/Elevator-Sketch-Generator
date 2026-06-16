@@ -60,10 +60,16 @@ DEFAULT_RCC_SEPARATOR_WIDTH = 200  # RCC wall separator width (fire lift)
 # Display Defaults
 # =============================================================================
 
-DEFAULT_DPI = 150
+DEFAULT_DPI = 300
 DEFAULT_FIGURE_WIDTH = 10  # inches
 DEFAULT_FIGURE_HEIGHT = 10  # inches
 DEFAULT_TITLE = "LIFT SHAFT PLAN"
+
+# Image border — solid frame drawn around the whole rendered PNG output.
+IMAGE_BORDER_WIDTH = 8            # px, black frame thickness
+IMAGE_BORDER_PAD = 10            # px, white gap between content and frame
+IMAGE_BORDER_COLOR = "black"
+IMAGE_BORDER_PAD_COLOR = "white"
 
 # =============================================================================
 # Drawing Style Constants
@@ -109,6 +115,7 @@ OPENING_EDGE_WIDTH = 1.0
 DIMENSION_ARROW_SIZE = 50  # Arrow head size in mm
 DIMENSION_OFFSET = 150  # Offset from object in mm
 DIMENSION_TEXT_SIZE = 6  # Font size for dimension text (smaller to avoid overlap)
+DIMENSION_ARROW_MUTATION = 10  # Arrowhead size (pts) at the default text size; scales with font
 DIMENSION_EXTENSION = 50  # Extension line beyond dimension
 
 # Title styling

@@ -1596,6 +1596,43 @@ html, body, .stApp, .stApp [data-testid="stAppViewContainer"] {
     return False
 
 
+# Max dimension-font scale (%) that fits before labels collide, by lift count.
+# Measured empirically (text-bbox overlap vs the 100% baseline), floored to the
+# 10% slider step and taken as the min across MRL/MRA. The slider's max_value is
+# set from this so over-scaling that overlaps labels is simply not selectable —
+# no caption needed; the control's range is the limit.
+_DIM_FONT_MAX_INLINE = {1: 200, 2: 150, 3: 110, 4: 100}
+_DIM_FONT_MAX_FACING = {1: 110, 2: 110, 3: 110, 4: 100}
+_DIM_FONT_MAX_SECTION = 160
+
+
+def _dim_font_max_pct(arrangement: str, n_bank1: int, n_bank2: int) -> int:
+    """Largest dimension-font % that keeps labels collision-free for this layout."""
+    if arrangement == "Facing":
+        n = max(n_bank1, n_bank2)
+        return _DIM_FONT_MAX_FACING.get(min(n, 4), 110)
+    return _DIM_FONT_MAX_INLINE.get(min(n_bank1, 4), 110)
+
+
+def _dim_font_slider(label_max: int, state_key: str):
+    """Render the dimension-font slider with an adaptive max; clamp stored value
+    into range first so Streamlit never errors when the ceiling drops."""
+    help_txt = ("Scale the dimension label text (100% = default). Upper limit adapts "
+                "to the layout so labels never overlap.")
+    if state_key in st.session_state:
+        # Clamp existing value into the (possibly lowered) range. Omit `value` so
+        # Streamlit doesn't warn about setting a default alongside session_state.
+        st.session_state[state_key] = min(st.session_state[state_key], label_max)
+        return st.slider(
+            "Font Size",
+            min_value=50, max_value=label_max, step=10, key=state_key, help=help_txt,
+        )
+    return st.slider(
+        "Font Size",
+        min_value=50, max_value=label_max, value=100, step=10, key=state_key, help=help_txt,
+    )
+
+
 def main():
     st.set_page_config(
         page_title="Drawing Debbie",
@@ -1685,6 +1722,10 @@ def main():
             show_accessibility = st.checkbox("Show Accessibility Symbol", value=False, key="show_accessibility")
             show_brackets = st.checkbox("Show Brackets", value=True, key="show_brackets")
             show_lift_doors = st.checkbox("Show Lift Doors", value=True, key="show_lift_doors")
+            dim_font_pct = _dim_font_slider(
+                _dim_font_max_pct(arrangement, num_lifts_bank1, num_lifts_bank2),
+                "dim_font_pct",
+            )
 
         else:
             st.divider()
@@ -1693,6 +1734,7 @@ def main():
             section_show_hatching = st.checkbox("Show Hatching", value=True, key="section_show_hatching")
             section_show_break_lines = st.checkbox("Show Break Lines", value=True, key="section_show_break_lines")
             section_show_machine = st.checkbox("Show Machine Image", value=True, key="section_show_machine")
+            section_dim_font_pct = _dim_font_slider(_DIM_FONT_MAX_SECTION, "section_dim_font_pct")
 
     # Machine-type change resets every lift to the new machine's defaults
     # (matches the web, which resets all lifts globally on machine change —
@@ -1827,6 +1869,7 @@ def main():
                         show_capacity=show_capacity,
                         show_accessibility=show_accessibility,
                         show_lift_doors=show_lift_doors,
+                        font_scale=dim_font_pct / 100,
                     )
 
                     st.session_state["generated_image"] = img_bytes
@@ -1944,6 +1987,7 @@ def main():
                         show_dimensions=section_show_dimensions,
                         show_break_lines=section_show_break_lines,
                         show_mrl_machine=section_show_machine,
+                        font_scale=section_dim_font_pct / 100,
                     )
 
                     st.session_state["section_generated_image"] = section_img_bytes
