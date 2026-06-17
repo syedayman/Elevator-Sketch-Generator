@@ -2268,11 +2268,31 @@ class LiftShaftSketch:
             display_options=display_options,
         )
 
-        # Draw centerlines if enabled
+        # Draw horizontal centerlines through each row of car cabins. Vertical
+        # centerlines are drawn per lift inside _draw_bank().
         if display_options["show_centerlines"]:
-            # Horizontal centerline through lobby center
-            lobby_center_y = self._bank2_y + self._max_shaft_depth_bank2 + 2 * wt + self.lobby_width / 2
-            draw_centerline(ax, (0, lobby_center_y), (self.total_width, lobby_center_y))
+            bank1_lift = self.lifts[0]
+            bank1_door_zone = 2 * bank1_lift.door_panel_thickness + bank1_lift.door_gap
+            bank1_center_y = (
+                self._bank1_y
+                + wt
+                + bank1_door_zone
+                + bank1_lift.finished_car_depth / 2
+            )
+            draw_centerline(ax, (0, bank1_center_y), (self.total_width, bank1_center_y))
+
+            bank2_lift = self.lifts_bank2[0]
+            bank2_sd = self._shaft_depths_bank2[0]
+            bank2_door_zone = 2 * bank2_lift.door_panel_thickness + bank2_lift.door_gap
+            bank2_shaft_y = self._bank2_y + wt + (self._max_shaft_depth_bank2 - bank2_sd)
+            bank2_center_y = (
+                bank2_shaft_y
+                + bank2_sd
+                - bank2_door_zone
+                - bank2_lift.unfinished_car_depth
+                + bank2_lift.finished_car_depth / 2
+            )
+            draw_centerline(ax, (0, bank2_center_y), (self.total_width, bank2_center_y))
 
         # Draw dimensions
         if display_options["show_dimensions"]:
