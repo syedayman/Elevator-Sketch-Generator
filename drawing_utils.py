@@ -208,6 +208,16 @@ def draw_opening(
     ax.add_patch(opening)
 
 
+def _dimension_label_with_units(text: str) -> str:
+    """Return dimension label text with millimetre units."""
+    label = str(text).strip()
+    if not label:
+        return label
+    if label.lower().endswith("mm"):
+        return label
+    return f"{label} mm"
+
+
 def draw_dimension_line(
     ax: plt.Axes,
     start: Tuple[float, float],
@@ -234,6 +244,8 @@ def draw_dimension_line(
     """
     if offset is None:
         offset = config.DIMENSION_OFFSET
+
+    label_text = _dimension_label_with_units(text)
 
     x1, y1 = start
     x2, y2 = end
@@ -301,7 +313,7 @@ def draw_dimension_line(
         ax.text(
             mid_x,
             dim_y + text_offset,
-            text,
+            label_text,
             ha="center",
             va="bottom" if offset > 0 else "top",
             fontsize=config.DIMENSION_TEXT_SIZE,
@@ -362,7 +374,7 @@ def draw_dimension_line(
         ax.text(
             dim_x + text_offset,
             mid_y,
-            text,
+            label_text,
             ha="left" if offset > 0 else "right",
             va="center",
             fontsize=config.DIMENSION_TEXT_SIZE,

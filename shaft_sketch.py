@@ -770,7 +770,7 @@ class LiftShaftSketch:
         )
         ax.text(
             (car_center_x + door_center_x) / 2, y_mid + gap * 0.12,
-            f"{int(round(abs(offset)))}",
+            f"{int(round(abs(offset)))} mm",
             ha="center", va="bottom",
             fontsize=config.DIMENSION_TEXT_SIZE * 0.7,
             color=config.DIMENSION_COLOR, zorder=12,
