@@ -413,7 +413,7 @@ section[data-testid="stSidebar"] [data-testid="stDivider"] {
 
 /* ---- Generated sketch image — soft glow + framed ---- */
 .stApp [data-testid="stImage"] img {
-    border-radius: 0.75rem;
+    border-radius: 0;
     filter: drop-shadow(0 0 40px rgba(56, 189, 248, 0.12));
 }
 
@@ -565,6 +565,7 @@ def make_default_lift(lift_type: str = "passenger", machine_type: str = "mrl") -
         "double_entrance": False,
         "door_offset_mm": 0,
         "door_offset_direction": "right",
+        "swap_brackets": False,
     }
 
 
@@ -1042,6 +1043,22 @@ def render_lift_config_form(
                  disabled=bool(L["double_entrance"]),
                  help=depth_formula)
 
+        # Swap bracket sides — only for MRL-style side-bracket lifts. MRA passenger
+        # has car brackets on both sides, so there is nothing to swap.
+        if mrl_style:
+            swkey = f"{prefix}_w_swap_brackets"
+            if swkey not in st.session_state:
+                st.session_state[swkey] = bool(L.get("swap_brackets", False))
+
+            def _cb_swap():
+                _apply({"swap_brackets": st.session_state[swkey]})
+
+            st.checkbox(
+                "Swap brackets",
+                key=swkey, on_change=_cb_swap,
+                help="Swap positions of the CWT bracket and car bracket with each other."
+            )
+
         # Capacity (conditional)
         if show_capacity_input:
             _num("capacity", "Capacity (KG)", min_value=100, max_value=10000, step=50,
@@ -1287,6 +1304,9 @@ def build_lift_config(lift_data: dict, machine_type: str, wall_thickness: float)
 
     if lift_data.get("double_entrance"):
         kwargs["double_entrance"] = True
+
+    if lift_data.get("swap_brackets"):
+        kwargs["swap_brackets"] = True
 
     if lift_data.get("telescopic_left_ext") is not None:
         kwargs["telescopic_left_ext"] = lift_data["telescopic_left_ext"]
@@ -1617,8 +1637,7 @@ def _dim_font_max_pct(arrangement: str, n_bank1: int, n_bank2: int) -> int:
 def _dim_font_slider(label_max: int, state_key: str):
     """Render the dimension-font slider with an adaptive max; clamp stored value
     into range first so Streamlit never errors when the ceiling drops."""
-    help_txt = ("Scale the dimension label text (100% = default). Upper limit adapts "
-                "to the layout so labels never overlap.")
+    help_txt = ("Scale the dimension label text. Upper limit adapts to the layout")
     if state_key in st.session_state:
         # Clamp existing value into the (possibly lowered) range. Omit `value` so
         # Streamlit doesn't warn about setting a default alongside session_state.

@@ -49,10 +49,17 @@ def add_image_border(png_bytes: bytes) -> bytes:
     with a border. Sizes/colors come from config.IMAGE_BORDER_*.
     """
     img = Image.open(io.BytesIO(png_bytes)).convert("RGB")
-    if config.IMAGE_BORDER_PAD > 0:
-        img = ImageOps.expand(img, border=config.IMAGE_BORDER_PAD, fill=config.IMAGE_BORDER_PAD_COLOR)
-    if config.IMAGE_BORDER_WIDTH > 0:
-        img = ImageOps.expand(img, border=config.IMAGE_BORDER_WIDTH, fill=config.IMAGE_BORDER_COLOR)
+    # Scale border/pad with image width so displayed thickness stays constant after
+    # the browser downscales the image; fall back to the absolute px floors.
+    pad = max(config.IMAGE_BORDER_PAD, round(img.width * config.IMAGE_BORDER_PAD_FRAC))
+    bw = max(config.IMAGE_BORDER_WIDTH, round(img.width * config.IMAGE_BORDER_WIDTH_FRAC))
+    # Black frame first (inner), white pad outside it. This keeps the black frame
+    # flanked by white so it stays visible on a dark page background too; on a white
+    # download the outer white pad simply blends in.
+    if bw > 0:
+        img = ImageOps.expand(img, border=bw, fill=config.IMAGE_BORDER_COLOR)
+    if pad > 0:
+        img = ImageOps.expand(img, border=pad, fill=config.IMAGE_BORDER_PAD_COLOR)
     out = io.BytesIO()
     img.save(out, format="png")
     out.seek(0)

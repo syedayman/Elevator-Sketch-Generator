@@ -66,8 +66,13 @@ DEFAULT_FIGURE_HEIGHT = 10  # inches
 DEFAULT_TITLE = "LIFT SHAFT PLAN"
 
 # Image border — solid frame drawn around the whole rendered PNG output.
-IMAGE_BORDER_WIDTH = 8            # px, black frame thickness
-IMAGE_BORDER_PAD = 10            # px, white gap between content and frame
+# Thickness scales with image width (fraction) so the border stays visible at any
+# DPI and after the web app downscales the image to fit the page. The px values are
+# absolute floors for very small images.
+IMAGE_BORDER_WIDTH = 4            # px, minimum black frame thickness
+IMAGE_BORDER_PAD = 8             # px, minimum white gap between content and frame
+IMAGE_BORDER_WIDTH_FRAC = 0.0035 # black frame thickness as fraction of image width
+IMAGE_BORDER_PAD_FRAC = 0.004    # white gap as fraction of image width
 IMAGE_BORDER_COLOR = "black"
 IMAGE_BORDER_PAD_COLOR = "white"
 
