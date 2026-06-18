@@ -2,6 +2,7 @@ CLAUDE.md
 .claude/
 __pycache__/
 output/
+INPUT_RESTRICTIONS.md
 
 # Secrets / environment (never commit)
 .env

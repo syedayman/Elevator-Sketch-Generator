@@ -569,6 +569,25 @@ def make_default_lift(lift_type: str = "passenger", machine_type: str = "mrl") -
     }
 
 
+def make_empty_lift(lift_type: str = "passenger") -> dict:
+    """Blank per-lift form data — every numeric cell is None (no defaults).
+    Non-numeric selects/toggles keep a valid value (widgets have no empty
+    state). Used after 'Clear All' so cells render blank until the user fills
+    them. Same keys as make_default_lift()."""
+    empty = {k: None for k in make_default_lift(lift_type, "mrl")}
+    empty["type"] = lift_type
+    empty["door_opening_type"] = "centre"
+    empty["door_offset_direction"] = "right"
+    empty["double_entrance"] = False
+    empty["swap_brackets"] = False
+    return empty
+
+
+def make_empty_section() -> dict:
+    """Blank section-view config — every numeric cell None. See make_empty_lift."""
+    return {k: None for k in make_default_section()}
+
+
 def make_default_section() -> dict:
     """Default section-view config. Port of makeDefaultSection()."""
     return {
@@ -702,14 +721,19 @@ def render_lift_config_form(
             if k.startswith(f"{prefix}_w_") and k not in keep:
                 del st.session_state[k]
 
+    cleared = bool(st.session_state.get("form_cleared"))
+
+    def _seed_lift(lift_type: str) -> dict:
+        return make_empty_lift(lift_type) if cleared else make_default_lift(lift_type, machine_type)
+
     # Initialize, or reset on machine-type change (web resets every lift to the
     # default for the new machine type, preserving lift type).
     if data_key not in st.session_state:
-        st.session_state[data_key] = make_default_lift("passenger", machine_type)
+        st.session_state[data_key] = _seed_lift("passenger")
         st.session_state[mt_key] = machine_type
     elif st.session_state.get(mt_key) != machine_type:
         cur_type = st.session_state[data_key].get("type", "passenger")
-        st.session_state[data_key] = make_default_lift(cur_type, machine_type)
+        st.session_state[data_key] = _seed_lift(cur_type)
         st.session_state[mt_key] = machine_type
         _reset_widget_keys()
 
@@ -736,7 +760,7 @@ def render_lift_config_form(
 
     def _cb_type():
         new_type = st.session_state[f"{prefix}_w_type"]
-        st.session_state[data_key] = make_default_lift(new_type, machine_type)
+        st.session_state[data_key] = _seed_lift(new_type)
         _reset_widget_keys(keep={f"{prefix}_w_type"})
 
     def _cb_cabin():
@@ -961,28 +985,55 @@ def render_lift_config_form(
         v = max(500, min(6000, st.session_state[f"{prefix}_w_door_panel_length"]))
         _apply({"door_panel_length": v})
 
+    def _guard(field, cb):
+        """Run cb; if a blank (None) cell makes the auto-adjust math fail, just
+        store the edited value and skip the cascade. Keeps a cleared/partial
+        form from throwing while the user is still filling cells in."""
+        def wrapped():
+            try:
+                cb()
+            except (TypeError, KeyError):
+                wk = f"{prefix}_w_{field}"
+                if wk in st.session_state:
+                    _apply({field: st.session_state[wk]})
+        return wrapped
+
+    def _guard_fn(cb, fallback):
+        """Like _guard but with a custom fallback (for dropdowns/checkboxes
+        whose auto-adjust math touches other, possibly-blank, cells)."""
+        def wrapped():
+            try:
+                cb()
+            except (TypeError, KeyError):
+                fallback()
+        return wrapped
+
     # ── Number-input helper: seed session_state once, no value= (avoids the
-    #    Streamlit "value + session_state" warning), clamp seed into range. ──
+    #    Streamlit "value + session_state" warning), clamp seed into range.
+    #    When the form is cleared, seed None so the cell renders blank. ──
     def _num(field, label, *, min_value=None, max_value=None, step=1,
              on_change=None, help=None, disabled=False, seed=None):
         wk = f"{prefix}_w_{field}"
         if wk not in st.session_state:
-            s = seed if seed is not None else L.get(field)
-            if s is None:
-                s = min_value if min_value is not None else 0
-            s = int(s)
-            if min_value is not None:
-                s = max(min_value, s)
-            if max_value is not None:
-                s = min(max_value, s)
-            st.session_state[wk] = s
+            if cleared:
+                st.session_state[wk] = None
+            else:
+                s = seed if seed is not None else L.get(field)
+                if s is None:
+                    s = min_value if min_value is not None else 0
+                s = int(s)
+                if min_value is not None:
+                    s = max(min_value, s)
+                if max_value is not None:
+                    s = min(max_value, s)
+                st.session_state[wk] = s
         kwargs = {"key": wk, "step": step}
         if min_value is not None:
             kwargs["min_value"] = min_value
         if max_value is not None:
             kwargs["max_value"] = max_value
         if on_change is not None:
-            kwargs["on_change"] = on_change
+            kwargs["on_change"] = _guard(field, on_change)
         if help is not None:
             kwargs["help"] = help
         if disabled:
@@ -1011,7 +1062,9 @@ def render_lift_config_form(
             dkey = f"{prefix}_w_double_entrance"
             if dkey not in st.session_state:
                 st.session_state[dkey] = bool(L["double_entrance"])
-            st.checkbox("Double Car Entrance", key=dkey, on_change=_cb_double)
+            st.checkbox("Double Car Entrance", key=dkey,
+                        on_change=_guard_fn(_cb_double,
+                                            lambda: _apply({"double_entrance": st.session_state[dkey]})))
 
         # Shaft Dimensions
         st.markdown("**Shaft Dimensions**")
@@ -1073,12 +1126,19 @@ def render_lift_config_form(
             cur_cabin = f"{L['width']}x{L['depth']}"
             if ckey not in st.session_state:
                 st.session_state[ckey] = cur_cabin if cur_cabin in cabin_opts else cabin_opts[0]
+            def _cabin_fallback():
+                w0, d0 = (int(x) for x in st.session_state[ckey].split("x"))
+                _apply({"width": w0, "depth": d0})
             st.selectbox(
                 "Cabin Size (W x D)",
                 options=cabin_opts,
                 format_func=lambda s: s.replace("x", " x ") + " mm",
-                key=ckey, on_change=_cb_cabin,
+                key=ckey, on_change=_guard_fn(_cb_cabin, _cabin_fallback),
             )
+            # A cabin dropdown can't be blank, so when the form is cleared seed
+            # the car W/D from the shown size (keeps fire lifts generatable).
+            if L["width"] is None or L["depth"] is None:
+                _cabin_fallback()
         else:
             cc1, cc2 = st.columns(2)
             with cc1:
@@ -1174,11 +1234,18 @@ def render_lift_config_form(
             otkey = f"{prefix}_w_door_opening_type"
             if otkey not in st.session_state:
                 st.session_state[otkey] = L["door_opening_type"]
+            def _opening_fallback():
+                nt = st.session_state[otkey]
+                if nt == "telescopic":
+                    _apply({"door_opening_type": nt, "door_panel_length": None})
+                else:
+                    _apply({"door_opening_type": nt,
+                            "telescopic_left_ext": None, "telescopic_right_ext": None})
             st.selectbox(
                 "Door Opening Type",
                 options=["centre", "telescopic"],
                 format_func=lambda x: "Telescopic Opening" if x == "telescopic" else "Centre Opening",
-                key=otkey, on_change=_cb_door_opening_type,
+                key=otkey, on_change=_guard_fn(_cb_door_opening_type, _opening_fallback),
             )
 
         if L["door_opening_type"] == "telescopic":
@@ -1187,7 +1254,8 @@ def render_lift_config_form(
                 _num("telescopic_left_ext", "Left Extension (mm)", min_value=50, max_value=2000, step=25,
                      on_change=_store("telescopic_left_ext"),
                      seed=L["telescopic_left_ext"] if L["telescopic_left_ext"] is not None
-                     else int(0.5 * L["door_width"]) + TELESCOPIC_LEFT_EXT_EXTRA)
+                     else (int(0.5 * L["door_width"]) + TELESCOPIC_LEFT_EXT_EXTRA
+                           if L["door_width"] is not None else None))
             with tc2:
                 _num("telescopic_right_ext", "Right Extension (mm)", min_value=50, max_value=1000, step=25,
                      on_change=_store("telescopic_right_ext"),
@@ -1202,7 +1270,8 @@ def render_lift_config_form(
                 _num("door_panel_length", "Door Panel Length (mm)", step=50,
                      on_change=_cb_panel_len,
                      seed=L["door_panel_length"] if L["door_panel_length"] is not None
-                     else min(2 * L["door_width"] + 2 * DEFAULT_DOOR_EXTENSION, L["shaft_width"]))
+                     else (min(2 * L["door_width"] + 2 * DEFAULT_DOOR_EXTENSION, L["shaft_width"])
+                           if L["door_width"] is not None and L["shaft_width"] is not None else None))
             with pc2:
                 _num("door_panel_thickness", "Door Panel Thickness (mm)", min_value=50, max_value=300, step=10,
                      on_change=_cb_thickness)
@@ -1330,26 +1399,44 @@ def build_lift_config(lift_data: dict, machine_type: str, wall_thickness: float)
     return LiftConfig(**kwargs)
 
 
+def _lift_has_blanks(ld: dict) -> bool:
+    """True if any required dimension cell is empty (None). Used to block
+    generation on a cleared/partial form with a friendly message instead of
+    letting the build crash on a None value."""
+    req = ["width", "depth", "shaft_width", "shaft_depth", "door_width",
+           "door_height", "door_panel_thickness",
+           "structural_opening_width", "structural_opening_height"]
+    if any(ld.get(f) is None for f in req):
+        return True
+    if ld.get("door_opening_type") == "telescopic":
+        return ld.get("telescopic_left_ext") is None or ld.get("telescopic_right_ext") is None
+    return ld.get("door_panel_length") is None
+
+
 # =============================================================================
 # Section-view config form — port of the web SectionConfigForm.
 # =============================================================================
 
 def render_section_config_form(machine_type: str) -> dict:
     """Render the section-view config form; return its data dict."""
+    cleared = bool(st.session_state.get("form_cleared"))
     sec_key = "section_data"
     if sec_key not in st.session_state:
-        st.session_state[sec_key] = make_default_section()
+        st.session_state[sec_key] = make_empty_section() if cleared else make_default_section()
     S = st.session_state[sec_key]
 
     def _num(field, label, *, min_value=None, max_value=None, step=1):
         wk = f"section_w_{field}"
         if wk not in st.session_state:
-            s = int(S[field])
-            if min_value is not None:
-                s = max(min_value, s)
-            if max_value is not None:
-                s = min(max_value, s)
-            st.session_state[wk] = s
+            if cleared or S.get(field) is None:
+                st.session_state[wk] = None
+            else:
+                s = int(S[field])
+                if min_value is not None:
+                    s = max(min_value, s)
+                if max_value is not None:
+                    s = min(max_value, s)
+                st.session_state[wk] = s
 
         def cb():
             S[field] = st.session_state[wk]
@@ -1668,6 +1755,25 @@ def main():
 
     st.html('<h1 class="main-brand-title">Drawing Debbie</h1>')
 
+    def _clear_all():
+        """Empty every input cell and reset options to defaults. Wipes all
+        session state (except auth), then flags the form cleared so the inputs
+        re-seed blank instead of with their defaults. Runs as the button's
+        on_click — before any widget is re-instantiated this run, so deleting
+        widget keys is safe."""
+        for k in list(st.session_state.keys()):
+            if k != "authenticated":
+                del st.session_state[k]
+        st.session_state["form_cleared"] = True
+
+    def _restore_defaults():
+        """Reset every input back to its default value. Same wipe as Clear All
+        but leaves form_cleared off, so cells re-seed with defaults (not blank)."""
+        for k in list(st.session_state.keys()):
+            if k != "authenticated":
+                del st.session_state[k]
+        st.session_state["form_cleared"] = False
+
     # Sidebar configuration
     with st.sidebar:
         # Brand block — logo + title + subtitle. The logo is inlined as a
@@ -1754,6 +1860,24 @@ def main():
             section_show_break_lines = st.checkbox("Show Break Lines", value=True, key="section_show_break_lines")
             section_show_machine = st.checkbox("Show Machine Image", value=True, key="section_show_machine")
             section_dim_font_pct = _dim_font_slider(_DIM_FONT_MAX_SECTION, "section_dim_font_pct")
+
+        st.divider()
+        st.button(
+            "Clear All",
+            type="secondary",
+            width="stretch",
+            key="clear_all_btn",
+            on_click=_clear_all,
+            help="Empty every input cell and reset the options above to defaults.",
+        )
+        st.button(
+            "Restore Defaults",
+            type="secondary",
+            width="stretch",
+            key="restore_defaults_btn",
+            on_click=_restore_defaults,
+            help="Reset every input back to its default value.",
+        )
 
     # Machine-type change resets every lift to the new machine's defaults
     # (matches the web, which resets all lifts globally on machine change —
@@ -1856,7 +1980,13 @@ def main():
 
             generate_btn = st.button("Generate Sketch", type="primary", width="stretch", key="plan_generate")
 
-            if generate_btn:
+            blanks_plan = (any(_lift_has_blanks(ld) for ld in bank1_lifts)
+                           or any(_lift_has_blanks(ld) for ld in bank2_lifts))
+            if generate_btn and blanks_plan:
+                st.session_state["generation_error"] = (
+                    "Some input cells are empty. Fill in all fields before generating.")
+                st.session_state["generated_image"] = None
+            elif generate_btn:
                 try:
                     # Build LiftConfig objects for Bank 1
                     lift_configs = [build_lift_config(ld, machine_type, wall_thickness) for ld in bank1_lifts]
@@ -1958,13 +2088,23 @@ def main():
                 "Generate Section", type="primary", width="stretch", key="section_generate"
             )
 
-            if section_generate_btn:
+            sec_req = ["shaft_width", "wall_thickness", "pit_slab", "pit_depth",
+                       "travel_height", "overhead_clearance", "door_height",
+                       "structural_opening_height"]
+            blanks_section = any(section_form.get(f) is None for f in sec_req) or (
+                machine_type == "mra" and section_form.get("machine_room_height") is None)
+            if section_generate_btn and blanks_section:
+                st.session_state["section_generation_error"] = (
+                    "Some input cells are empty. Fill in all fields before generating.")
+                st.session_state["section_generated_image"] = None
+            elif section_generate_btn:
                 try:
                     wall = section_form["wall_thickness"]
 
                     # Target lift: fire if any fire lift is configured, else passenger.
                     target = "fire" if any(d["type"] == "fire" for (_b, _i, d) in plan_lifts) else "passenger"
-                    configs = [build_lift_config(d, machine_type, wall) for (_b, _i, d) in plan_lifts]
+                    configs = [build_lift_config(d, machine_type, wall)
+                               for (_b, _i, d) in plan_lifts if not _lift_has_blanks(d)]
                     section_lift_config = next((c for c in configs if c.lift_type == target), None)
 
                     # Fallback: synthetic config when no matching lift exists.
