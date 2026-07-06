@@ -9,7 +9,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle, FancyArrowPatch, Polygon, Circle
 from matplotlib.lines import Line2D
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, ImageDraw, ImageFont
 from typing import Tuple, Optional, List
 
 # Support both package (relative) and standalone (absolute) imports
@@ -17,6 +17,168 @@ try:
     from . import config
 except ImportError:
     import config
+
+
+_BRIEF_SPEC_HEADER = [
+    "Lift ID", "Usage", "Type", "Capacity", "Group Control", "Speed",
+    "Cabin W×D (mm)", "Door W×H (mm)",
+]
+
+# Standard DBC car capacities (kg → no. of persons). Persons are only shown for
+# these fixed sizes; any other capacity renders as "<kg> kg" with no person count.
+_CAPACITY_PERSONS = {
+    750: 10, 1050: 14, 1275: 17, 1350: 18,
+    1600: 21, 2000: 26, 2500: 33, 3200: 43,
+}
+
+
+def format_brief_capacity(cap) -> str:
+    """Brief-spec capacity cell: '<kg> kg / <persons> persons' for the standard
+    DBC capacities, '<kg> kg' for any other value, and '' when unset."""
+    if cap in (None, 0):
+        return ""
+    kg = int(cap)
+    persons = _CAPACITY_PERSONS.get(kg)
+    return f"{kg} kg / {persons} persons" if persons is not None else f"{kg} kg"
+
+
+def brief_spec_row(lc) -> List[str]:
+    """Build one brief-spec table row from a lift config (duck-typed LiftConfig).
+
+    Columns mirror `_BRIEF_SPEC_HEADER`:
+    [Lift ID, Usage, Type, Capacity, Group Control, Speed, Cabin W×D, Door W×H].
+
+    `lift_group_control` and `lift_speed` are sourced from the Space Planning
+    table and stamped during report generation. Both are blank in the standalone
+    preview, where they render as "TBC"."""
+    usage = "Fire/Service" if lc.lift_type == "fire" else "Passenger"
+    mtype = (lc.lift_machine_type or "").upper()
+    group = (getattr(lc, "lift_group_control", "") or "").strip() or "TBC"
+    speed = (getattr(lc, "lift_speed", "") or "").strip() or "TBC"
+    cabin = f"{int(lc.finished_car_width)} × {int(lc.finished_car_depth)}"
+    door = f"{int(lc.door_width)} × {int(lc.door_height)}"
+    return [
+        lc.lift_id or "—", usage, mtype,
+        format_brief_capacity(lc.lift_capacity), group, speed, cabin, door,
+    ]
+
+
+def _brief_spec_fonts(size: int):
+    """Load DejaVu (regular + bold) TrueType fonts at the given px size, falling
+    back to PIL's default bitmap font if matplotlib's fonts can't be located."""
+    try:
+        from matplotlib import font_manager
+        reg = font_manager.findfont(font_manager.FontProperties(family="DejaVu Sans"))
+        bold = font_manager.findfont(
+            font_manager.FontProperties(family="DejaVu Sans", weight="bold")
+        )
+        return (
+            ImageFont.truetype(reg, size),
+            ImageFont.truetype(bold, size),
+            ImageFont.truetype(bold, int(size * 1.05)),
+        )
+    except Exception:
+        d = ImageFont.load_default()
+        return d, d, d
+
+
+def composite_brief_spec_table(
+    png_bytes: bytes,
+    rows: List[List[str]],
+    title: Optional[str] = None,
+) -> bytes:
+    """Composite the brief-specification matrix into a white strip ABOVE the
+    sketch (top-right), returning new PNG bytes.
+
+    Drawn with PIL at pixel precision so the font is readable, columns are sized
+    to their content (no overflow), and the strip is compact regardless of lift
+    count or plan arrangement. The sketch itself is untouched (no shrinking).
+
+    Columns: Lift ID | Usage | Type | Cap (kg). One row per lift.
+    """
+    if not rows:
+        return png_bytes
+
+    im = Image.open(io.BytesIO(png_bytes)).convert("RGB")
+    W, H = im.size
+
+    fs = int(min(34, max(14, W * 0.013)))
+    f_reg, f_bold, f_title = _brief_spec_fonts(fs)
+    pad = int(fs * 0.7)
+    row_h = int(fs * 1.7)
+    title_h = int(fs * 2.0)
+    line_w = max(1, int(fs * 0.07))
+    black = (0, 0, 0)
+
+    measure = ImageDraw.Draw(im)
+
+    def text_w(s, fnt) -> int:
+        return int(measure.textlength(str(s), font=fnt))
+
+    ncol = len(_BRIEF_SPEC_HEADER)
+    col_w = []
+    for c in range(ncol):
+        w = text_w(_BRIEF_SPEC_HEADER[c], f_bold)
+        for r in rows:
+            w = max(w, text_w(r[c], f_reg))
+        col_w.append(w + 2 * pad)
+    table_w = sum(col_w)
+
+    title_text = title or "BRIEF SPECIFICATION"
+    need_w = text_w(title_text, f_title) + 2 * pad
+    if need_w > table_w:  # widen columns proportionally so the title fits
+        scale = need_w / table_w
+        col_w = [int(c * scale) for c in col_w]
+        table_w = sum(col_w)
+
+    body_rows = [_BRIEF_SPEC_HEADER] + rows
+    table_h = title_h + len(body_rows) * row_h
+    margin = max(8, int(W * 0.015))
+    strip_h = table_h + 2 * margin
+
+    canvas = Image.new("RGB", (W, H + strip_h), "white")
+    canvas.paste(im, (0, strip_h))
+    draw = ImageDraw.Draw(canvas)
+
+    x0 = W - margin - table_w
+    y0 = margin
+
+    # Title strip
+    draw.text(
+        (int(x0 + table_w / 2), int(y0 + title_h / 2)),
+        title_text, anchor="mm", fill=black, font=f_title,
+    )
+
+    # Header fill
+    hy0 = y0 + title_h
+    draw.rectangle([x0, hy0, x0 + table_w, hy0 + row_h], fill=(239, 239, 239))
+
+    # Cell text (header + data), per-row baseline rules
+    for ri, vals in enumerate(body_rows):
+        ry = hy0 + ri * row_h
+        fnt = f_bold if ri == 0 else f_reg
+        cx = x0
+        for ci in range(ncol):
+            draw.text(
+                (int(cx + col_w[ci] / 2), int(ry + row_h / 2)),
+                str(vals[ci]), anchor="mm", fill=black, font=fnt,
+            )
+            cx += col_w[ci]
+        draw.line([x0, ry + row_h, x0 + table_w, ry + row_h], fill=black, width=line_w)
+
+    # Column dividers (over the body, below the title strip)
+    cx = x0
+    for ci in range(ncol - 1):
+        cx += col_w[ci]
+        draw.line([cx, hy0, cx, y0 + table_h], fill=black, width=line_w)
+
+    # Outer border + title divider on top
+    draw.rectangle([x0, y0, x0 + table_w, y0 + table_h], outline=black, width=line_w)
+    draw.line([x0, hy0, x0 + table_w, hy0], fill=black, width=line_w)
+
+    out = io.BytesIO()
+    canvas.save(out, format="PNG")
+    return out.getvalue()
 
 
 @contextmanager
@@ -1090,9 +1252,10 @@ def draw_car_interior_details(
     show_cop: bool = True,
     show_accessibility: bool = True,
     cop_position: str = "left",
+    lift_id: Optional[str] = None,
 ) -> None:
     """
-    Draw interior details of the lift car (capacity, C.O.P, accessibility).
+    Draw interior details of the lift car (lift ID, capacity, C.O.P, accessibility).
 
     Args:
         ax: Matplotlib axes
@@ -1104,9 +1267,19 @@ def draw_car_interior_details(
         show_cop: Whether to show C.O.P marker
         show_accessibility: Whether to show accessibility symbol
         cop_position: "left" or "right" for C.O.P placement
+        lift_id: Lift designation (e.g. "PL-01") drawn inside the cabin
     """
     center_x = car_x + car_width / 2
     center_y = car_y + car_depth / 2
+
+    # Draw lift ID label near the top of the cabin (above the capacity label)
+    if lift_id:
+        ax.text(
+            center_x, center_y + car_depth * 0.34, lift_id,
+            ha="center", va="center",
+            fontsize=config.CAPACITY_TEXT_SIZE, fontweight="bold",
+            color=config.CAPACITY_TEXT_COLOR, zorder=10,
+        )
 
     # Draw capacity label in center
     if capacity:

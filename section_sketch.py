@@ -29,6 +29,8 @@ try:
         draw_machine_image,
         add_image_border,
         scaled_dimension_font,
+        composite_brief_spec_table,
+        brief_spec_row,
     )
 except ImportError:
     import config
@@ -43,6 +45,8 @@ except ImportError:
         draw_machine_image,
         add_image_border,
         scaled_dimension_font,
+        composite_brief_spec_table,
+        brief_spec_row,
     )
 
 
@@ -254,6 +258,9 @@ class LiftSectionSketch:
         show_pit: bool = True,
         show_break_lines: bool = True,
         show_mrl_machine: bool = True,
+        show_brief_spec: bool = False,
+        brief_spec_title: Optional[str] = None,
+        brief_spec_rows: Optional[list] = None,
         title: str = None,
         subtitle: Optional[str] = None,
         dpi: int = None,
@@ -261,6 +268,9 @@ class LiftSectionSketch:
     ) -> bytes:
         """
         Return PNG as bytes (for API responses).
+
+        `brief_spec_rows` overrides the default single-lift brief-spec body (used
+        when one section represents several lifts sharing the same config).
 
         Args:
             show_hatching: Draw concrete hatch pattern on walls
@@ -281,6 +291,8 @@ class LiftSectionSketch:
             "show_pit": show_pit,
             "show_break_lines": show_break_lines,
             "show_mrl_machine": show_mrl_machine,
+            "show_brief_spec": show_brief_spec,
+            "brief_spec_title": brief_spec_title,
         }
 
         fig, ax = self._create_figure()
@@ -299,7 +311,11 @@ class LiftSectionSketch:
         )
         plt.close(fig)
 
-        return add_image_border(buf.getvalue())
+        png = buf.getvalue()
+        if show_brief_spec:
+            rows = brief_spec_rows if brief_spec_rows is not None else self._brief_spec_rows()
+            png = composite_brief_spec_table(png, rows, brief_spec_title)
+        return add_image_border(png)
 
     def _create_figure(self) -> tuple:
         """Create matplotlib figure and axes for section view."""
@@ -601,6 +617,15 @@ class LiftSectionSketch:
         margin_top = 500  # Top margin
         ax.set_xlim(-margin_x, self.total_width + margin_x)
         ax.set_ylim(pit_bottom - margin_bottom, machine_room_top + margin_top)
+        # NOTE: the brief-spec table is composited as a PIL strip above the saved
+        # image (see to_bytes); it is no longer drawn inside the axes.
+
+    def _brief_spec_rows(self) -> list:
+        """Single-row brief-spec body for the depicted lift (columns per
+        `brief_spec_row`)."""
+        if self.lift_config is None:
+            return []
+        return [brief_spec_row(self.lift_config)]
 
     def _draw_section_dimensions(
         self,

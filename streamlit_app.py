@@ -1,20 +1,26 @@
 """
-Streamlit web app for generating lift shaft plan sketches.
+Streamlit web app for generating lift shaft plan and section sketches.
+
+Feature parity with the KARR AI standalone sketch generator (apps/web
+dashboard/sketches): single-config state model, multi-core plans, lift IDs +
+brief-spec table, split passenger/fire plan carousel, whole-sketch undo/redo,
+and the Debbie AI editing assistant. See sketch_state.py (config + reducers),
+debbie_operations.py (operation interpreter) and debbie_agent.py (OpenAI call).
 """
 
 import base64
 import os
+import re
+import time
 from pathlib import Path
 
 import streamlit as st
-from shaft_sketch import LiftShaftSketch, LiftConfig, FIRE_LIFT_CABIN_SIZES
-from section_sketch import LiftSectionSketch, SectionConfig
-import config
 
-# Fire lift cabin size options for dropdown
-FIRE_CABIN_OPTIONS = {
-    f"{w} x {d} mm": (w, d) for w, d in FIRE_LIFT_CABIN_SIZES
-}
+import debbie_agent
+import debbie_operations as dops
+import sketch_state as ss
+from section_sketch import LiftSectionSketch, SectionConfig
+from shaft_sketch import LiftConfig, LiftShaftSketch, FIRE_LIFT_CABIN_SIZES
 
 # Brand assets (sidebar logo + display font), inlined as base64 data URIs.
 BRAND_IMAGE_PATH = Path(__file__).with_name("drawing-debbie.png")
@@ -440,870 +446,115 @@ section[data-testid="stSidebar"] [data-testid="stDivider"] {
 
 
 # =============================================================================
-# Geometry constants — sourced from config.py so the form math matches the
-# drawing engine exactly. These mirror apps/web/lib/sketches/sketch-utils.ts in
-# the KARR AI web app (this form is a 1:1 port of that React form's behavior).
+# Single-config state model
 # =============================================================================
+# The whole sketch lives in ONE nested dict (st.session_state["config"]) —
+# mirror of the KARR AI web app's SketchConfig. Every mutation goes through
+# set_config(), which pushes an undo snapshot and bumps the widget revision so
+# every input re-seeds from the new config on the next run. Manual form edits
+# and Debbie's AI edits share the same reducers (sketch_state.py) and the same
+# undo/redo timeline — exactly like the web page's useUndoable + setConfig.
 
-CAR_WALL_THICKNESS = config.DEFAULT_CAR_WALL_THICKNESS            # 25
-DOOR_GAP = config.DEFAULT_DOOR_GAP                                # 30
-REAR_CLEARANCE = config.DEFAULT_REAR_CLEARANCE                    # 200
-DEFAULT_DOOR_EXTENSION = config.DEFAULT_DOOR_EXTENSION            # 100
-FIRE_DOOR_WIDTH = config.FIRE_LIFT_DOOR_WIDTH                     # 1200
-FIRE_MIN_SHAFT_WIDTH = config.FIRE_LIFT_MIN_SHAFT_WIDTH           # 2700
-FIRE_MIN_SHAFT_WIDTH_TELESCOPIC = config.FIRE_LIFT_MIN_SHAFT_WIDTH_TELESCOPIC  # 2550
-TELESCOPIC_LEFT_EXT_EXTRA = config.TELESCOPIC_LEFT_EXTENSION_EXTRA   # 100
-TELESCOPIC_RIGHT_EXT = config.TELESCOPIC_RIGHT_EXTENSION             # 200
-# Bracket form fields hold PURE bracket widths; rails are separate inputs.
-# Zone width (what the sketch arrows show) = pure bracket + rail.
-RAIL_WIDTH_DEFAULT = config.DEFAULT_RAIL_WIDTH                                        # 100
-CW_BOX_WIDTH_DEFAULT = config.CW_BOX_WIDTH                                            # 450
-CW_BOX_DEPTH_DEFAULT = config.CW_BOX_HEIGHT                                           # 1000
-MRA_CW_BOX_WIDTH_DEFAULT = config.MRA_CW_BOX_WIDTH                                    # 1100
-MRL_CW_BRACKET_MIN = config.DEFAULT_COUNTERWEIGHT_BRACKET_WIDTH - RAIL_WIDTH_DEFAULT  # 525
-MRL_CAR_BRACKET_MIN = config.DEFAULT_CAR_BRACKET_WIDTH - RAIL_WIDTH_DEFAULT           # 275
-MRA_CAR_BRACKET_MIN = config.MRA_CAR_BRACKET_WIDTH - RAIL_WIDTH_DEFAULT               # 225
-MRA_CW_BRACKET_DEPTH_MIN = config.MRA_CW_BRACKET_DEPTH               # 400
-MRA_CW_GAP_MIN = config.MRA_CW_GAP                                   # 100
-MRA_CW_WALL_GAP_MIN = config.MRA_CW_WALL_GAP                         # 100
-PANEL_THICKNESS_DEFAULT = config.DEFAULT_LIFT_DOOR_THICKNESS         # 150
+UNDO_LIMIT = 50  # matches use-undoable.ts DEFAULT_LIMIT
+
+PLAN_VARIANTS = ("all", "passenger", "fire")
+PLAN_VARIANT_LABELS = {"all": "All Lifts", "passenger": "Passenger Lifts", "fire": "Fire Lifts"}
 
 
-# =============================================================================
-# Default factories + validation — direct port of sketch-utils.ts
-# =============================================================================
-
-def make_default_lift(lift_type: str = "passenger", machine_type: str = "mrl") -> dict:
-    """Default per-lift form data. Port of makeDefaultLift()."""
-    is_fire = lift_type == "fire"
-    car_w = 1400 if is_fire else 1900
-    car_d = 2400 if is_fire else 1600
-    door_w = FIRE_DOOR_WIDTH if is_fire else 1100
-
-    uc_w = car_w + 2 * CAR_WALL_THICKNESS
-    uc_d = car_d + CAR_WALL_THICKNESS
-
-    cw_bracket = car_bracket = None
-    mra_left = mra_right = mra_cw_depth = mra_cw_gap = mra_cw_wall_gap = None
-
-    # MRA fire lifts use MRL-style side brackets (CW left, car right)
-    mra_rear_cw = machine_type == "mra" and not is_fire
-
-    if mra_rear_cw:
-        shaft_w = uc_w + 2 * (MRA_CAR_BRACKET_MIN + RAIL_WIDTH_DEFAULT)
-        shaft_d = (2 * PANEL_THICKNESS_DEFAULT + DOOR_GAP + uc_d + MRA_CW_GAP_MIN
-                   + MRA_CW_BRACKET_DEPTH_MIN + MRA_CW_WALL_GAP_MIN)
-        mra_cw_depth = MRA_CW_BRACKET_DEPTH_MIN
-        mra_cw_gap = MRA_CW_GAP_MIN
-        mra_cw_wall_gap = MRA_CW_WALL_GAP_MIN
-    else:
-        shaft_w = (MRL_CW_BRACKET_MIN + RAIL_WIDTH_DEFAULT) + uc_w \
-                  + (MRL_CAR_BRACKET_MIN + RAIL_WIDTH_DEFAULT)
-        shaft_d = 2 * PANEL_THICKNESS_DEFAULT + DOOR_GAP + uc_d + REAR_CLEARANCE
-        cw_bracket = MRL_CW_BRACKET_MIN
-        car_bracket = MRL_CAR_BRACKET_MIN
-
-    # Seed fire shafts at the DBC minimum width (default only — users can edit
-    # freely below it; nothing validates or blocks)
-    if is_fire:
-        shaft_w = max(shaft_w, FIRE_MIN_SHAFT_WIDTH)
-
-    # Redistribute extra width into the PURE brackets (rails stay at default)
-    if mra_rear_cw:
-        avail_w = shaft_w - uc_w - 2 * RAIL_WIDTH_DEFAULT
-        extra = max(0, avail_w - 2 * MRA_CAR_BRACKET_MIN)
-        mra_left = MRA_CAR_BRACKET_MIN + extra // 2
-        mra_right = avail_w - mra_left
-    else:
-        avail_w = shaft_w - uc_w - 2 * RAIL_WIDTH_DEFAULT
-        extra = max(0, avail_w - MRL_CW_BRACKET_MIN - MRL_CAR_BRACKET_MIN)
-        cw_bracket = MRL_CW_BRACKET_MIN + extra // 2
-        car_bracket = avail_w - cw_bracket
-
-    # Fire lifts default to telescopic door opening (panel length unused there;
-    # switching to centre recomputes it — see _cb_door_opening_type)
-    if is_fire:
-        door_type = "telescopic"
-        tele_left = int(0.5 * door_w) + TELESCOPIC_LEFT_EXT_EXTRA
-        tele_right = TELESCOPIC_RIGHT_EXT
-        panel_len = None
-    else:
-        door_type = "centre"
-        tele_left = tele_right = None
-        panel_len = min(2 * door_w + 2 * DEFAULT_DOOR_EXTENSION, shaft_w)
-
-    return {
-        "type": lift_type,
-        "capacity": 1600 if is_fire else 1350,
-        "width": car_w,
-        "depth": car_d,
-        "cabin_height": 2400,
-        "shaft_width": shaft_w,
-        "shaft_depth": shaft_d,
-        "door_width": door_w,
-        "door_height": 2100,
-        "door_panel_length": panel_len,
-        "door_panel_thickness": PANEL_THICKNESS_DEFAULT,
-        "structural_opening_width": 1300,
-        "structural_opening_height": 2200,
-        "door_opening_type": door_type,
-        "telescopic_left_ext": tele_left,
-        "telescopic_right_ext": tele_right,
-        "cw_bracket_width": cw_bracket,
-        "car_bracket_width": car_bracket,
-        "rail_width_left": RAIL_WIDTH_DEFAULT,
-        "rail_width_right": RAIL_WIDTH_DEFAULT,
-        "door_gap": DOOR_GAP,
-        "cw_box_width": CW_BOX_WIDTH_DEFAULT,
-        "cw_box_depth": CW_BOX_DEPTH_DEFAULT,
-        "mra_cw_box_width": MRA_CW_BOX_WIDTH_DEFAULT,
-        "mra_left_bracket": mra_left,
-        "mra_right_bracket": mra_right,
-        "mra_cw_bracket_depth": mra_cw_depth,
-        "mra_cw_gap": mra_cw_gap,
-        "mra_cw_wall_gap": mra_cw_wall_gap,
-        "double_entrance": False,
-        "door_offset_mm": 0,
-        "door_offset_direction": "right",
-        "swap_brackets": False,
-    }
+def init_state() -> None:
+    stt = st.session_state
+    if "config" not in stt:
+        stt["config"] = ss.make_default_config()
+    stt.setdefault("hist_past", [])
+    stt.setdefault("hist_future", [])
+    stt.setdefault("rev", 0)
+    stt.setdefault("ui_active_view", "plan")
+    stt.setdefault("ui_active_core", 0)
+    stt.setdefault("ui_plan_variant", "all")
+    stt.setdefault("ui_section_source", "c0-b1-0")
+    stt.setdefault("plan_image", None)
+    stt.setdefault("plan_error", None)
+    stt.setdefault("section_image", None)
+    stt.setdefault("section_error", None)
+    stt.setdefault("debbie_msgs", [])
+    stt.setdefault("debbie_pending", None)
+    stt.setdefault("debbie_hits", [])
 
 
-def make_empty_lift(lift_type: str = "passenger") -> dict:
-    """Blank per-lift form data — every numeric cell is None (no defaults).
-    Non-numeric selects/toggles keep a valid value (widgets have no empty
-    state). Used after 'Clear All' so cells render blank until the user fills
-    them. Same keys as make_default_lift()."""
-    empty = {k: None for k in make_default_lift(lift_type, "mrl")}
-    empty["type"] = lift_type
-    empty["door_opening_type"] = "centre"
-    empty["door_offset_direction"] = "right"
-    empty["double_entrance"] = False
-    empty["swap_brackets"] = False
-    return empty
+def bump_rev() -> None:
+    """Invalidate every widget key so inputs re-seed from the config."""
+    st.session_state["rev"] += 1
 
 
-def make_empty_section() -> dict:
-    """Blank section-view config — every numeric cell None. See make_empty_lift."""
-    return {k: None for k in make_default_section()}
+def _wk(name: str) -> str:
+    """Revision-stamped widget key."""
+    return f"w{st.session_state['rev']}_{name}"
 
 
-def make_default_section() -> dict:
-    """Default section-view config. Port of makeDefaultSection()."""
-    return {
-        "shaft_width": 2950,   # horizontal dim in section (= shaft depth)
-        "wall_thickness": 200,
-        "pit_slab": 200,
-        "pit_depth": 1200,
-        "travel_height": 30000,
-        "overhead_clearance": 4200,
-        "door_height": 2100,
-        "structural_opening_height": 2200,
-        "machine_room_height": 3000,
-    }
-
-
-def lift_rails(lift: dict) -> tuple:
-    """Per-lift rail widths with defaults (left, right)."""
-    rl = lift.get("rail_width_left")
-    rr = lift.get("rail_width_right")
-    return (rl if rl is not None else RAIL_WIDTH_DEFAULT,
-            rr if rr is not None else RAIL_WIDTH_DEFAULT)
-
-
-def lift_door_gap(lift: dict) -> float:
-    """Per-lift running clearance with default."""
-    g = lift.get("door_gap")
-    return g if g is not None else DOOR_GAP
-
-
-def compute_min_shaft_width(lift: dict, machine_type: str) -> int:
-    """Port of computeMinShaftWidth(). Zone = pure bracket + rail."""
-    uc_w = lift["width"] + 2 * CAR_WALL_THICKNESS
-    rail_l, rail_r = lift_rails(lift)
-    if machine_type == "mra" and not lift.get("double_entrance") and lift["type"] != "fire":
-        min_w = (MRA_CAR_BRACKET_MIN + rail_l) + uc_w + (MRA_CAR_BRACKET_MIN + rail_r)
-    else:
-        # MRL, or MRA with MRL-style side brackets (double entrance / fire)
-        min_w = (MRL_CW_BRACKET_MIN + rail_l) + uc_w + (MRL_CAR_BRACKET_MIN + rail_r)
-    if lift["type"] == "fire":
-        fire_min = (FIRE_MIN_SHAFT_WIDTH_TELESCOPIC
-                    if lift.get("door_opening_type") == "telescopic"
-                    else FIRE_MIN_SHAFT_WIDTH)
-        min_w = max(min_w, fire_min)
-    return int(min_w)
-
-
-# Min/max bounds for the bounded numeric widgets. Used to clamp values that
-# callbacks write programmatically (e.g. auto-adjusted door panel length) so
-# Streamlit never sees an out-of-range session_state value (which would raise).
-FIELD_BOUNDS = {
-    "door_height": (1500, 3500),
-    # door_panel_length is intentionally NOT clamped here: the web lets door
-    # width auto-grow it past 6000 (only a user edit clamps it). See
-    # _cb_panel_len, which clamps user input but leaves auto-grow free.
-    "door_panel_thickness": (50, 300),
-    "structural_opening_width": (800, 3000),
-    "structural_opening_height": (1500, 4000),
-    "telescopic_left_ext": (50, 2000),
-    "telescopic_right_ext": (50, 1000),
-    "capacity": (100, 10000),
-}
-
-
-def compute_default_separator_types(lifts: list, common_shaft: bool) -> list:
-    """Port of computeDefaultSeparatorTypes()."""
-    types = []
-    for i in range(len(lifts) - 1):
-        if not common_shaft:
-            types.append("rcc_wall")
-        elif lifts[i]["type"] == "fire" or lifts[i + 1]["type"] == "fire":
-            types.append("rcc_wall")
-        else:
-            types.append("steel_beam")
-    return types
-
-
-def gather_plan_lifts(machine_type: str) -> list:
-    """Collect the plan-view lift form dicts from session_state, as (bank, idx,
-    data) tuples. The section view derives its geometry from a real plan lift,
-    exactly like the KARR AI /preview/section endpoint."""
-    arrangement = st.session_state.get("arrangement", "Inline")
-    out = []
-    n1 = int(st.session_state.get("num_lifts_bank1", 1))
-    for i in range(n1):
-        d = st.session_state.get(f"bank1_lift_{i}_data") or make_default_lift("passenger", machine_type)
-        out.append(("bank1", i, d))
-    if arrangement == "Facing":
-        n2 = int(st.session_state.get("num_lifts_bank2", 2))
-        for i in range(n2):
-            d = st.session_state.get(f"bank2_lift_{i}_data") or make_default_lift("passenger", machine_type)
-            out.append(("bank2", i, d))
-    return out
-
-
-def copy_lift_to_section(lift: dict, plan_wall_thickness: int) -> None:
-    """Port of copyLiftValuesToSection() — copy a plan lift's shaft depth, door
-    height and structural height into the section form (+ plan wall thickness).
-    Writes both the section data dict and the widget keys (called before the
-    section form is rendered this run)."""
-    S = st.session_state.setdefault("section_data", make_default_section())
-    updates = {
-        "shaft_width": int(lift["shaft_depth"]),  # section 'Shaft Depth' field
-        "door_height": max(1500, min(3500, int(lift["door_height"]))),
-        "structural_opening_height": max(1500, min(4000, int(lift["structural_opening_height"]))),
-        "wall_thickness": max(100, min(500, int(plan_wall_thickness))),
-    }
-    for f, v in updates.items():
-        S[f] = v
-        st.session_state[f"section_w_{f}"] = v
-
-
-# =============================================================================
-# Per-lift config form — 1:1 port of the web LiftConfigForm component.
-# Brackets are always-editable, zero-sum linked, clamped only with max(0, .).
-# Car-width / shaft changes redistribute brackets but keep them editable.
-# =============================================================================
-
-def render_lift_config_form(
-    lift_index: int,
-    bank_name: str,
-    machine_type: str,
-    show_capacity_input: bool = False,
-) -> dict:
-    """Render one lift's config form and return its form-data dict."""
-    prefix = f"{bank_name}_lift_{lift_index}"
-    data_key = f"{prefix}_data"
-    mt_key = f"{prefix}_prev_mt"
-
-    def _reset_widget_keys(keep: set = frozenset()):
-        for k in list(st.session_state.keys()):
-            if k.startswith(f"{prefix}_w_") and k not in keep:
+def cleanup_old_widget_keys() -> None:
+    """Drop widget state from previous revisions (stale after a rev bump)."""
+    rev_prefix = f"w{st.session_state['rev']}_"
+    for k in list(st.session_state.keys()):
+        if k.startswith("w") and "_" in k and not k.startswith(rev_prefix):
+            head_part = k.split("_", 1)[0]
+            if head_part[1:].isdigit():
                 del st.session_state[k]
 
-    cleared = bool(st.session_state.get("form_cleared"))
 
-    def _seed_lift(lift_type: str) -> dict:
-        return make_empty_lift(lift_type) if cleared else make_default_lift(lift_type, machine_type)
+def set_config(next_cfg: dict) -> None:
+    """Undoable config write (drop-in for the web's setConfig): push the prior
+    value onto the undo stack, clear the redo stack, re-seed all widgets."""
+    stt = st.session_state
+    if next_cfg is stt["config"]:
+        return
+    stt["hist_past"].append(ss.deep_copy_config(stt["config"]))
+    if len(stt["hist_past"]) > UNDO_LIMIT:
+        stt["hist_past"].pop(0)
+    stt["hist_future"] = []
+    stt["config"] = next_cfg
+    bump_rev()
 
-    # Initialize, or reset on machine-type change (web resets every lift to the
-    # default for the new machine type, preserving lift type).
-    if data_key not in st.session_state:
-        st.session_state[data_key] = _seed_lift("passenger")
-        st.session_state[mt_key] = machine_type
-    elif st.session_state.get(mt_key) != machine_type:
-        cur_type = st.session_state[data_key].get("type", "passenger")
-        st.session_state[data_key] = _seed_lift(cur_type)
-        st.session_state[mt_key] = machine_type
-        _reset_widget_keys()
 
-    L = st.session_state[data_key]
+def can_undo() -> bool:
+    return len(st.session_state["hist_past"]) > 0
 
-    def _apply(updates: dict):
-        """Write fields to the lift dict + mirror to their widget keys.
 
-        Values written to a bounded widget are clamped to that widget's
-        min/max so Streamlit never sees an out-of-range session_state value.
-        The lift dict keeps the clamped value too (it is what gets drawn).
-        """
-        data = st.session_state[data_key]
-        for k, v in updates.items():
-            if v is not None and k in FIELD_BOUNDS:
-                lo, hi = FIELD_BOUNDS[k]
-                v = max(lo, min(hi, v))
-            data[k] = v
-            wk = f"{prefix}_w_{k}"
-            if wk in st.session_state:
-                st.session_state[wk] = v
+def can_redo() -> bool:
+    return len(st.session_state["hist_future"]) > 0
 
-    # ── Callbacks (mirror the React onChange handlers exactly) ──
 
-    def _cb_type():
-        new_type = st.session_state[f"{prefix}_w_type"]
-        st.session_state[data_key] = _seed_lift(new_type)
-        _reset_widget_keys(keep={f"{prefix}_w_type"})
+def undo_config() -> None:
+    stt = st.session_state
+    if not stt["hist_past"]:
+        return
+    stt["hist_future"].insert(0, ss.deep_copy_config(stt["config"]))
+    stt["config"] = stt["hist_past"].pop()
+    bump_rev()
 
-    def _cb_cabin():
-        data = st.session_state[data_key]
-        w, d = (int(x) for x in st.session_state[f"{prefix}_w_cabin"].split("x"))
-        rail_l, rail_r = lift_rails(data)
-        new_avail = data["shaft_width"] - (w + 2 * CAR_WALL_THICKNESS) - rail_l - rail_r
-        upd = {"width": w, "depth": d}
-        if machine_type == "mrl" or data["double_entrance"] or data["type"] == "fire":
-            extra = max(0, new_avail - MRL_CW_BRACKET_MIN - MRL_CAR_BRACKET_MIN)
-            cw = MRL_CW_BRACKET_MIN + extra // 2
-            upd["cw_bracket_width"] = cw
-            upd["car_bracket_width"] = new_avail - cw
-        else:
-            extra = max(0, new_avail - 2 * MRA_CAR_BRACKET_MIN)
-            left = MRA_CAR_BRACKET_MIN + extra // 2
-            upd["mra_left_bracket"] = left
-            upd["mra_right_bracket"] = new_avail - left
-        if data["double_entrance"]:
-            door_zone = 2 * (data["door_panel_thickness"] or PANEL_THICKNESS_DEFAULT) + lift_door_gap(data)
-            upd["shaft_depth"] = door_zone + d + door_zone
-        _apply(upd)
 
-    def _cb_width():
-        data = st.session_state[data_key]
-        v = st.session_state[f"{prefix}_w_width"]
-        rail_l, rail_r = lift_rails(data)
-        new_avail = data["shaft_width"] - (v + 2 * CAR_WALL_THICKNESS) - rail_l - rail_r
-        upd = {"width": v}
-        half = new_avail // 2
-        if machine_type == "mrl":
-            upd["cw_bracket_width"] = max(0, half)
-            upd["car_bracket_width"] = max(0, new_avail - half)
-        else:
-            upd["mra_left_bracket"] = max(0, half)
-            upd["mra_right_bracket"] = max(0, new_avail - half)
-        _apply(upd)
+def redo_config() -> None:
+    stt = st.session_state
+    if not stt["hist_future"]:
+        return
+    stt["hist_past"].append(ss.deep_copy_config(stt["config"]))
+    stt["config"] = stt["hist_future"].pop(0)
+    bump_rev()
 
-    def _cb_shaft_width():
-        data = st.session_state[data_key]
-        new_sw = st.session_state[f"{prefix}_w_shaft_width"]
-        uc_w = data["width"] + 2 * CAR_WALL_THICKNESS
-        rail_l, rail_r = lift_rails(data)
-        old_avail = data["shaft_width"] - uc_w - rail_l - rail_r
-        new_avail = new_sw - uc_w - rail_l - rail_r
-        half = (new_avail - old_avail) // 2
-        upd = {"shaft_width": new_sw}
-        if machine_type == "mrl" or data["double_entrance"] or data["type"] == "fire":
-            old_cw = data["cw_bracket_width"] if data["cw_bracket_width"] is not None else MRL_CW_BRACKET_MIN
-            new_cw = old_cw + half
-            upd["cw_bracket_width"] = max(0, new_cw)
-            upd["car_bracket_width"] = max(0, new_avail - new_cw)
-        else:
-            old_left = data["mra_left_bracket"] if data["mra_left_bracket"] is not None else MRA_CAR_BRACKET_MIN
-            new_left = old_left + half
-            upd["mra_left_bracket"] = max(0, new_left)
-            upd["mra_right_bracket"] = max(0, new_avail - new_left)
-        _apply(upd)
 
-    def _cb_shaft_depth():
-        data = st.session_state[data_key]
-        new_sd = st.session_state[f"{prefix}_w_shaft_depth"]
-        upd = {"shaft_depth": new_sd}
-        if machine_type == "mra" and not data["double_entrance"] and data["type"] != "fire":
-            uc_d = data["depth"] + CAR_WALL_THICKNESS
-            fixed_depth = 2 * (data["door_panel_thickness"] or PANEL_THICKNESS_DEFAULT) + lift_door_gap(data) + uc_d
-            wall_gap = data["mra_cw_wall_gap"] if data["mra_cw_wall_gap"] is not None else MRA_CW_WALL_GAP_MIN
-            old_avail_d = data["shaft_depth"] - fixed_depth - wall_gap
-            new_avail_d = new_sd - fixed_depth - wall_gap
-            old_cwd = data["mra_cw_bracket_depth"] if data["mra_cw_bracket_depth"] is not None else MRA_CW_BRACKET_DEPTH_MIN
-            half = (new_avail_d - old_avail_d) // 2
-            new_cwd = old_cwd + half
-            upd["mra_cw_bracket_depth"] = max(0, new_cwd)
-            upd["mra_cw_gap"] = max(0, new_avail_d - new_cwd)
-        _apply(upd)
+def _active_core_index() -> int:
+    cfg = st.session_state["config"]
+    return max(0, min(st.session_state["ui_active_core"], len(cfg["cores"]) - 1))
 
-    def _avail_w():
-        data = st.session_state[data_key]
-        rail_l, rail_r = lift_rails(data)
-        return data["shaft_width"] - (data["width"] + 2 * CAR_WALL_THICKNESS) - rail_l - rail_r
 
-    def _cb_rail_left():
-        # Rail edit: same-side bracket absorbs (zone and shaft width stay put)
-        data = st.session_state[data_key]
-        v = max(0, st.session_state[f"{prefix}_w_rail_width_left"])
-        old_l, _ = lift_rails(data)
-        delta = v - old_l
-        upd = {"rail_width_left": v}
-        if machine_type == "mrl" or data["double_entrance"] or data["type"] == "fire":
-            cw = data["cw_bracket_width"] if data["cw_bracket_width"] is not None else MRL_CW_BRACKET_MIN
-            upd["cw_bracket_width"] = cw - delta
-        else:
-            left = data["mra_left_bracket"] if data["mra_left_bracket"] is not None else MRA_CAR_BRACKET_MIN
-            upd["mra_left_bracket"] = left - delta
-        _apply(upd)
+def _replace_lift(cfg: dict, ci: int, bank: str, idx: int, new_lift: dict) -> dict:
+    """Swap one lift (recomputing that bank's separator defaults) — same helper
+    the operation interpreter uses, so form edits stay identical to Debbie's."""
+    return dops._replace_lift(cfg, ci, bank, idx, new_lift)
 
-    def _cb_rail_right():
-        data = st.session_state[data_key]
-        v = max(0, st.session_state[f"{prefix}_w_rail_width_right"])
-        _, old_r = lift_rails(data)
-        delta = v - old_r
-        upd = {"rail_width_right": v}
-        if machine_type == "mrl" or data["double_entrance"] or data["type"] == "fire":
-            car = data["car_bracket_width"] if data["car_bracket_width"] is not None else MRL_CAR_BRACKET_MIN
-            upd["car_bracket_width"] = car - delta
-        else:
-            right = data["mra_right_bracket"] if data["mra_right_bracket"] is not None else MRA_CAR_BRACKET_MIN
-            upd["mra_right_bracket"] = right - delta
-        _apply(upd)
 
-    def _cb_door_gap():
-        data = st.session_state[data_key]
-        v = max(0, st.session_state[f"{prefix}_w_door_gap"])
-        upd = {"door_gap": v}
-        if data["double_entrance"]:
-            door_zone = 2 * (data["door_panel_thickness"] or PANEL_THICKNESS_DEFAULT) + v
-            upd["shaft_depth"] = door_zone + data["depth"] + door_zone
-        _apply(upd)
-
-    def _cb_cw():
-        v = max(0, st.session_state[f"{prefix}_w_cw_bracket_width"])
-        _apply({"cw_bracket_width": v, "car_bracket_width": _avail_w() - v})
-
-    def _cb_car():
-        v = max(0, st.session_state[f"{prefix}_w_car_bracket_width"])
-        _apply({"car_bracket_width": v, "cw_bracket_width": _avail_w() - v})
-
-    def _cb_mra_left():
-        v = max(0, st.session_state[f"{prefix}_w_mra_left_bracket"])
-        _apply({"mra_left_bracket": v, "mra_right_bracket": _avail_w() - v})
-
-    def _cb_mra_right():
-        v = max(0, st.session_state[f"{prefix}_w_mra_right_bracket"])
-        _apply({"mra_right_bracket": v, "mra_left_bracket": _avail_w() - v})
-
-    def _avail_d():
-        data = st.session_state[data_key]
-        uc_d = data["depth"] + CAR_WALL_THICKNESS
-        fixed = 2 * (data["door_panel_thickness"] or PANEL_THICKNESS_DEFAULT) + lift_door_gap(data) + uc_d
-        wall_gap = data["mra_cw_wall_gap"] if data["mra_cw_wall_gap"] is not None else MRA_CW_WALL_GAP_MIN
-        return data["shaft_depth"] - fixed - wall_gap
-
-    def _cb_mra_cwd():
-        v = max(0, st.session_state[f"{prefix}_w_mra_cw_bracket_depth"])
-        _apply({"mra_cw_bracket_depth": v, "mra_cw_gap": _avail_d() - v})
-
-    def _cb_mra_gap():
-        v = max(0, st.session_state[f"{prefix}_w_mra_cw_gap"])
-        _apply({"mra_cw_gap": v, "mra_cw_bracket_depth": _avail_d() - v})
-
-    def _cb_mra_wall_gap():
-        data = st.session_state[data_key]
-        v = max(0, st.session_state[f"{prefix}_w_mra_cw_wall_gap"])
-        uc_d = data["depth"] + CAR_WALL_THICKNESS
-        fixed = 2 * (data["door_panel_thickness"] or PANEL_THICKNESS_DEFAULT) + lift_door_gap(data) + uc_d
-        new_avail_d = data["shaft_depth"] - fixed - v
-        cwd = data["mra_cw_bracket_depth"] if data["mra_cw_bracket_depth"] is not None else MRA_CW_BRACKET_DEPTH_MIN
-        _apply({"mra_cw_wall_gap": v, "mra_cw_gap": max(0, new_avail_d - cwd)})
-
-    def _cb_double():
-        # Double entrance is fire-only; fire lifts use MRL-style side brackets in
-        # both MRL and MRA, so only the shaft depth changes with the toggle.
-        data = st.session_state[data_key]
-        on = st.session_state[f"{prefix}_w_double_entrance"]
-        upd = {"double_entrance": on}
-        if on:
-            door_zone = 2 * (data["door_panel_thickness"] or PANEL_THICKNESS_DEFAULT) + lift_door_gap(data)
-            upd["shaft_depth"] = door_zone + data["depth"] + door_zone
-        else:
-            uc_d = data["depth"] + CAR_WALL_THICKNESS
-            upd["shaft_depth"] = 2 * PANEL_THICKNESS_DEFAULT + lift_door_gap(data) + uc_d + REAR_CLEARANCE
-        _apply(upd)
-
-    def _cb_door_width():
-        data = st.session_state[data_key]
-        v = st.session_state[f"{prefix}_w_door_width"]
-        upd = {"door_width": v}
-        if data["door_opening_type"] != "telescopic":
-            prev = data["door_width"]
-            current_panel = (data["door_panel_length"]
-                             if data["door_panel_length"] is not None
-                             else min(2 * prev + 2 * DEFAULT_DOOR_EXTENSION, data["shaft_width"]))
-            upd["door_panel_length"] = current_panel + 2 * (v - prev)
-        if data["door_opening_type"] == "telescopic" and data["telescopic_left_ext"] is not None:
-            old_default = int(0.5 * data["door_width"]) + TELESCOPIC_LEFT_EXT_EXTRA
-            if data["telescopic_left_ext"] == old_default:
-                upd["telescopic_left_ext"] = int(0.5 * v) + TELESCOPIC_LEFT_EXT_EXTRA
-        _apply(upd)
-
-    def _cb_door_opening_type():
-        data = st.session_state[data_key]
-        new_type = st.session_state[f"{prefix}_w_door_opening_type"]
-        upd = {"door_opening_type": new_type}
-        if new_type == "telescopic":
-            upd["telescopic_left_ext"] = int(0.5 * data["door_width"]) + TELESCOPIC_LEFT_EXT_EXTRA
-            upd["telescopic_right_ext"] = TELESCOPIC_RIGHT_EXT
-            upd["door_panel_length"] = None
-        else:
-            upd["telescopic_left_ext"] = None
-            upd["telescopic_right_ext"] = None
-            upd["door_panel_length"] = min(2 * data["door_width"] + 2 * DEFAULT_DOOR_EXTENSION, data["shaft_width"])
-        _apply(upd)
-
-    def _cb_thickness():
-        data = st.session_state[data_key]
-        v = st.session_state[f"{prefix}_w_door_panel_thickness"]
-        upd = {"door_panel_thickness": v}
-        if data["double_entrance"]:
-            door_zone = 2 * v + lift_door_gap(data)
-            upd["shaft_depth"] = door_zone + data["depth"] + door_zone
-        _apply(upd)
-
-    def _store(field):
-        def cb():
-            _apply({field: st.session_state[f"{prefix}_w_{field}"]})
-        return cb
-
-    def _cb_panel_len():
-        # Clamp only user edits to [500, 6000] (web NumInput commit behavior).
-        # Programmatic auto-grow from door width is left uncapped (see
-        # FIELD_BOUNDS) so it matches the web.
-        v = max(500, min(6000, st.session_state[f"{prefix}_w_door_panel_length"]))
-        _apply({"door_panel_length": v})
-
-    def _guard(field, cb):
-        """Run cb; if a blank (None) cell makes the auto-adjust math fail, just
-        store the edited value and skip the cascade. Keeps a cleared/partial
-        form from throwing while the user is still filling cells in."""
-        def wrapped():
-            try:
-                cb()
-            except (TypeError, KeyError):
-                wk = f"{prefix}_w_{field}"
-                if wk in st.session_state:
-                    _apply({field: st.session_state[wk]})
-        return wrapped
-
-    def _guard_fn(cb, fallback):
-        """Like _guard but with a custom fallback (for dropdowns/checkboxes
-        whose auto-adjust math touches other, possibly-blank, cells)."""
-        def wrapped():
-            try:
-                cb()
-            except (TypeError, KeyError):
-                fallback()
-        return wrapped
-
-    # ── Number-input helper: seed session_state once, no value= (avoids the
-    #    Streamlit "value + session_state" warning), clamp seed into range.
-    #    When the form is cleared, seed None so the cell renders blank. ──
-    def _num(field, label, *, min_value=None, max_value=None, step=1,
-             on_change=None, help=None, disabled=False, seed=None):
-        wk = f"{prefix}_w_{field}"
-        if wk not in st.session_state:
-            if cleared:
-                st.session_state[wk] = None
-            else:
-                s = seed if seed is not None else L.get(field)
-                if s is None:
-                    s = min_value if min_value is not None else 0
-                s = int(s)
-                if min_value is not None:
-                    s = max(min_value, s)
-                if max_value is not None:
-                    s = min(max_value, s)
-                st.session_state[wk] = s
-        kwargs = {"key": wk, "step": step}
-        if min_value is not None:
-            kwargs["min_value"] = min_value
-        if max_value is not None:
-            kwargs["max_value"] = max_value
-        if on_change is not None:
-            kwargs["on_change"] = _guard(field, on_change)
-        if help is not None:
-            kwargs["help"] = help
-        if disabled:
-            kwargs["disabled"] = True
-        return st.number_input(label, **kwargs)
-
-    # ── Render ──
-    is_fire = L["type"] == "fire"
-    title = f"Lift {lift_index + 1} · {'Fire/Service' if is_fire else 'Passenger'}"
-
-    with st.expander(title, expanded=(lift_index == 0)):
-
-        # Lift Type
-        tkey = f"{prefix}_w_type"
-        if tkey not in st.session_state:
-            st.session_state[tkey] = L["type"]
-        st.selectbox(
-            "Lift Type",
-            options=["passenger", "fire"],
-            format_func=lambda x: "Fire/Service" if x == "fire" else "Passenger",
-            key=tkey, on_change=_cb_type,
-        )
-
-        # Double Car Entrance (fire only)
-        if is_fire:
-            dkey = f"{prefix}_w_double_entrance"
-            if dkey not in st.session_state:
-                st.session_state[dkey] = bool(L["double_entrance"])
-            st.checkbox("Double Car Entrance", key=dkey,
-                        on_change=_guard_fn(_cb_double,
-                                            lambda: _apply({"double_entrance": st.session_state[dkey]})))
-
-        # Shaft Dimensions
-        st.markdown("**Shaft Dimensions**")
-        mrl_style = machine_type == "mrl" or L["double_entrance"] or L["type"] == "fire"
-        if mrl_style:
-            width_formula = ("Min = CWT Bracket Spacing + Unfinished Car Width "
-                             "(finished + 50) + Car Bracket Spacing")
-            if is_fire:
-                width_formula += ". Fire lifts: at least 2700 (2925 with telescopic doors)."
-        else:
-            width_formula = ("Min = Left Car Bracket Spacing + Unfinished Car Width "
-                             "(finished + 50) + Right Car Bracket Spacing")
-        if L["double_entrance"]:
-            depth_formula = ("Auto-computed: Door Zone + Finished Car Depth + Door Zone, "
-                             "where Door Zone = 2 x Door Panel + Door Gap")
-        elif mrl_style:
-            depth_formula = ("Min = Unfinished Car Depth (finished + 25) + "
-                             "2 x Door Panel + Door Gap + Rear Clearance (200)")
-        else:
-            depth_formula = ("Min = 2 x Door Panel + Door Gap + Unfinished Car Depth "
-                             "(finished + 25) + CWT Gap + CWT Bracket Spacing + "
-                             "CWT Wall Gap")
-        c1, c2 = st.columns(2)
-        with c1:
-            _num("shaft_width", "Shaft Width (mm)", step=10, on_change=_cb_shaft_width,
-                 help=width_formula)
-        with c2:
-            _num("shaft_depth", "Shaft Depth (mm)", step=10, on_change=_cb_shaft_depth,
-                 disabled=bool(L["double_entrance"]),
-                 help=depth_formula)
-
-        # Swap bracket sides — only for MRL-style side-bracket lifts. MRA passenger
-        # has car brackets on both sides, so there is nothing to swap.
-        if mrl_style:
-            swkey = f"{prefix}_w_swap_brackets"
-            if swkey not in st.session_state:
-                st.session_state[swkey] = bool(L.get("swap_brackets", False))
-
-            def _cb_swap():
-                _apply({"swap_brackets": st.session_state[swkey]})
-
-            st.checkbox(
-                "Swap brackets",
-                key=swkey, on_change=_cb_swap,
-                help="Swap positions of the CWT bracket and car bracket with each other."
-            )
-
-        # Capacity (conditional)
-        if show_capacity_input:
-            _num("capacity", "Capacity (KG)", min_value=100, max_value=10000, step=50,
-                 on_change=_store("capacity"),
-                 seed=L["capacity"] if L["capacity"] is not None else (1600 if is_fire else 1350))
-
-        # Car Dimensions
-        st.markdown("**Car Dimensions**")
-        if is_fire:
-            ckey = f"{prefix}_w_cabin"
-            cabin_opts = [f"{w}x{d}" for w, d in FIRE_LIFT_CABIN_SIZES]
-            cur_cabin = f"{L['width']}x{L['depth']}"
-            if ckey not in st.session_state:
-                st.session_state[ckey] = cur_cabin if cur_cabin in cabin_opts else cabin_opts[0]
-            def _cabin_fallback():
-                w0, d0 = (int(x) for x in st.session_state[ckey].split("x"))
-                _apply({"width": w0, "depth": d0})
-            st.selectbox(
-                "Cabin Size (W x D)",
-                options=cabin_opts,
-                format_func=lambda s: s.replace("x", " x ") + " mm",
-                key=ckey, on_change=_guard_fn(_cb_cabin, _cabin_fallback),
-            )
-            # A cabin dropdown can't be blank, so when the form is cleared seed
-            # the car W/D from the shown size (keeps fire lifts generatable).
-            if L["width"] is None or L["depth"] is None:
-                _cabin_fallback()
-        else:
-            cc1, cc2 = st.columns(2)
-            with cc1:
-                _num("width", "Car Width (mm)", step=10, on_change=_cb_width)
-            with cc2:
-                _num("depth", "Car Depth (mm)", step=10, on_change=_store("depth"))
-
-        # Shaft Spacing — always editable, zero-sum, max(0, .) only
-        st.markdown("**Shaft Spacing**")
-        if machine_type == "mrl" or L["double_entrance"] or L["type"] == "fire":
-            bc1, bc2 = st.columns(2)
-            with bc1:
-                _num("cw_bracket_width", "CWT Bracket Spacing (mm)", step=25,
-                     on_change=_cb_cw, help="Car bracket auto-adjusts.",
-                     seed=L["cw_bracket_width"] if L["cw_bracket_width"] is not None else MRL_CW_BRACKET_MIN)
-            with bc2:
-                _num("car_bracket_width", "Car Bracket Spacing (mm)", step=25,
-                     on_change=_cb_car, help="CWT bracket auto-adjusts.",
-                     seed=L["car_bracket_width"] if L["car_bracket_width"] is not None else MRL_CAR_BRACKET_MIN)
-        else:
-            st.caption("Width")
-            wc1, wc2 = st.columns(2)
-            with wc1:
-                _num("mra_left_bracket", "Left Car Bracket Spacing (mm)", step=25,
-                     on_change=_cb_mra_left,
-                     seed=L["mra_left_bracket"] if L["mra_left_bracket"] is not None else MRA_CAR_BRACKET_MIN)
-            with wc2:
-                _num("mra_right_bracket", "Right Car Bracket Spacing (mm)", step=25,
-                     on_change=_cb_mra_right,
-                     seed=L["mra_right_bracket"] if L["mra_right_bracket"] is not None else MRA_CAR_BRACKET_MIN)
-            st.caption("Depth")
-            dc1, dc2 = st.columns(2)
-            with dc1:
-                _num("mra_cw_bracket_depth", "CWT Bracket Spacing (mm)", step=25,
-                     on_change=_cb_mra_cwd,
-                     seed=L["mra_cw_bracket_depth"] if L["mra_cw_bracket_depth"] is not None else MRA_CW_BRACKET_DEPTH_MIN)
-            with dc2:
-                _num("mra_cw_gap", "CWT Gap (mm)", step=25,
-                     on_change=_cb_mra_gap,
-                     seed=L["mra_cw_gap"] if L["mra_cw_gap"] is not None else MRA_CW_GAP_MIN)
-            _num("mra_cw_wall_gap", "CWT Wall Gap (mm)", step=25,
-                 on_change=_cb_mra_wall_gap,
-                 help="Space between rear wall and CWT box. CWT gap auto-adjusts.",
-                 seed=L["mra_cw_wall_gap"] if L["mra_cw_wall_gap"] is not None else MRA_CW_WALL_GAP_MIN)
-
-        # Car guide rails (decoupled from brackets; arrow shows bracket + rail)
-        rc1, rc2 = st.columns(2)
-        with rc1:
-            _num("rail_width_left", "Left Rail Spacing (mm)", step=5,
-                 on_change=_cb_rail_left,
-                 help="Bracket on this side auto-adjusts; arrow shows bracket + rail.",
-                 seed=L.get("rail_width_left") if L.get("rail_width_left") is not None else RAIL_WIDTH_DEFAULT)
-        with rc2:
-            _num("rail_width_right", "Right Rail Spacing (mm)", step=5,
-                 on_change=_cb_rail_right,
-                 help="Bracket on this side auto-adjusts.",
-                 seed=L.get("rail_width_right") if L.get("rail_width_right") is not None else RAIL_WIDTH_DEFAULT)
-
-        # CW box visual dimensions (free inputs; the box floats inside its zone)
-        if machine_type == "mrl" or L["double_entrance"] or L["type"] == "fire":
-            cwb1, cwb2 = st.columns(2)
-            with cwb1:
-                _num("cw_box_width", "CWT Box Width (mm)", step=25,
-                     on_change=_store("cw_box_width"),
-                     seed=L.get("cw_box_width") if L.get("cw_box_width") is not None else CW_BOX_WIDTH_DEFAULT)
-            with cwb2:
-                _num("cw_box_depth", "CWT Box Depth (mm)", step=25,
-                     on_change=_store("cw_box_depth"),
-                     seed=L.get("cw_box_depth") if L.get("cw_box_depth") is not None else CW_BOX_DEPTH_DEFAULT)
-        else:
-            _num("mra_cw_box_width", "CWT Box Spacing (mm)", step=25,
-                 on_change=_store("mra_cw_box_width"),
-                 help="Width of the rear CWT box (depth = CWT Bracket Spacing).",
-                 seed=L.get("mra_cw_box_width") if L.get("mra_cw_box_width") is not None else MRA_CW_BOX_WIDTH_DEFAULT)
-
-        # Door Settings
-        st.markdown("**Door Settings**")
-        dwc1, dwc2 = st.columns(2)
-        with dwc1:
-            _num("door_width", "Door Width (mm)",
-                 min_value=FIRE_DOOR_WIDTH if is_fire else 700, max_value=2000, step=50,
-                 on_change=_cb_door_width)
-        with dwc2:
-            _num("door_height", "Door Height (mm)", min_value=1500, max_value=3500, step=50,
-                 on_change=_store("door_height"))
-
-        _num("door_gap", "Running Clearance (mm)", min_value=0, max_value=500, step=5,
-             on_change=_cb_door_gap,
-             help="Clearance between the landing and car door.",
-             seed=L.get("door_gap") if L.get("door_gap") is not None else DOOR_GAP)
-
-        if is_fire:
-            otkey = f"{prefix}_w_door_opening_type"
-            if otkey not in st.session_state:
-                st.session_state[otkey] = L["door_opening_type"]
-            def _opening_fallback():
-                nt = st.session_state[otkey]
-                if nt == "telescopic":
-                    _apply({"door_opening_type": nt, "door_panel_length": None})
-                else:
-                    _apply({"door_opening_type": nt,
-                            "telescopic_left_ext": None, "telescopic_right_ext": None})
-            st.selectbox(
-                "Door Opening Type",
-                options=["centre", "telescopic"],
-                format_func=lambda x: "Telescopic Opening" if x == "telescopic" else "Centre Opening",
-                key=otkey, on_change=_guard_fn(_cb_door_opening_type, _opening_fallback),
-            )
-
-        if L["door_opening_type"] == "telescopic":
-            tc1, tc2 = st.columns(2)
-            with tc1:
-                _num("telescopic_left_ext", "Left Extension (mm)", min_value=50, max_value=2000, step=25,
-                     on_change=_store("telescopic_left_ext"),
-                     seed=L["telescopic_left_ext"] if L["telescopic_left_ext"] is not None
-                     else (int(0.5 * L["door_width"]) + TELESCOPIC_LEFT_EXT_EXTRA
-                           if L["door_width"] is not None else None))
-            with tc2:
-                _num("telescopic_right_ext", "Right Extension (mm)", min_value=50, max_value=1000, step=25,
-                     on_change=_store("telescopic_right_ext"),
-                     seed=L["telescopic_right_ext"] if L["telescopic_right_ext"] is not None else TELESCOPIC_RIGHT_EXT)
-            _num("door_panel_thickness", "Door Panel Thickness (mm)", min_value=50, max_value=300, step=10,
-                 on_change=_cb_thickness)
-        else:
-            pc1, pc2 = st.columns(2)
-            with pc1:
-                # No min/max on the widget so an auto-grown value past 6000
-                # doesn't raise; _cb_panel_len clamps user input to [500, 6000].
-                _num("door_panel_length", "Door Panel Length (mm)", step=50,
-                     on_change=_cb_panel_len,
-                     seed=L["door_panel_length"] if L["door_panel_length"] is not None
-                     else (min(2 * L["door_width"] + 2 * DEFAULT_DOOR_EXTENSION, L["shaft_width"])
-                           if L["door_width"] is not None and L["shaft_width"] is not None else None))
-            with pc2:
-                _num("door_panel_thickness", "Door Panel Thickness (mm)", min_value=50, max_value=300, step=10,
-                     on_change=_cb_thickness)
-
-        sc1, sc2 = st.columns(2)
-        with sc1:
-            _num("structural_opening_width", "Structural Opening W (mm)", min_value=800, max_value=3000, step=50,
-                 on_change=_store("structural_opening_width"))
-        with sc2:
-            _num("structural_opening_height", "Structural Opening H (mm)", min_value=1500, max_value=4000, step=50,
-                 on_change=_store("structural_opening_height"))
-
-        # Door horizontal offset from cabin centre (X axis). No upper bound —
-        # the user is responsible for visual correctness, even if parts overlap.
-        oc1, oc2 = st.columns(2)
-        with oc1:
-            _num("door_offset_mm", "Door Centre Offset (mm)", min_value=0, step=25,
-                 on_change=_store("door_offset_mm"),
-                 help="Shift the door (opening, jambs, panels, returns) left/right "
-                      "from the cabin centre. Overlap is allowed.")
-        with oc2:
-            odkey = f"{prefix}_w_door_offset_direction"
-            if odkey not in st.session_state:
-                st.session_state[odkey] = L.get("door_offset_direction", "right")
-            st.selectbox(
-                "Offset Direction",
-                options=["left", "right"],
-                format_func=lambda x: x.capitalize(),
-                key=odkey, on_change=_store("door_offset_direction"),
-            )
-
-    return st.session_state[data_key]
+def _get_lift(cfg: dict, ci: int, bank: str, idx: int) -> dict:
+    key = "bank1_lifts" if bank == "bank1" else "bank2_lifts"
+    return cfg["cores"][ci][key][idx]
 
 
 # =============================================================================
@@ -1325,6 +576,7 @@ def build_lift_config(lift_data: dict, machine_type: str, wall_thickness: float)
 
     kwargs = {
         "lift_type": lift_data.get("type", "passenger"),
+        "lift_id": lift_data.get("lift_id", ""),
         "lift_machine_type": machine_type,
         "finished_car_width": lift_data.get("width", 1900),
         "finished_car_depth": lift_data.get("depth", 1600),
@@ -1343,10 +595,10 @@ def build_lift_config(lift_data: dict, machine_type: str, wall_thickness: float)
 
     # Rails + running clearance (LiftConfig bracket fields are ZONE widths,
     # so form's pure bracket values get the rail added back below)
-    rail_l, rail_r = lift_rails(lift_data)
+    rail_l, rail_r = ss.lift_rails(lift_data)
     kwargs["rail_width_left"] = rail_l
     kwargs["rail_width_right"] = rail_r
-    kwargs["door_gap"] = lift_door_gap(lift_data)
+    kwargs["door_gap"] = ss.lift_door_gap(lift_data)
     if lift_data.get("cw_box_width") is not None:
         kwargs["cw_box_width"] = lift_data["cw_box_width"]
     if lift_data.get("cw_box_depth") is not None:
@@ -1386,7 +638,7 @@ def build_lift_config(lift_data: dict, machine_type: str, wall_thickness: float)
         kwargs["door_offset_mm"] = lift_data["door_offset_mm"]
         kwargs["door_offset_direction"] = lift_data.get("door_offset_direction", "right")
 
-    # Construct once (surfaces any genuine config error, e.g. fire cabin size).
+    # Construct once (surfaces any genuine config error early).
     LiftConfig(**kwargs)
 
     shaft_width = lift_data.get("shaft_width")
@@ -1399,98 +651,863 @@ def build_lift_config(lift_data: dict, machine_type: str, wall_thickness: float)
     return LiftConfig(**kwargs)
 
 
-def _lift_has_blanks(ld: dict) -> bool:
-    """True if any required dimension cell is empty (None). Used to block
-    generation on a cleared/partial form with a friendly message instead of
-    letting the build crash on a None value."""
-    req = ["width", "depth", "shaft_width", "shaft_depth", "door_width",
-           "door_height", "door_panel_thickness",
-           "structural_opening_width", "structural_opening_height"]
-    if any(ld.get(f) is None for f in req):
-        return True
-    if ld.get("door_opening_type") == "telescopic":
-        return ld.get("telescopic_left_ext") is None or ld.get("telescopic_right_ext") is None
-    return ld.get("door_panel_length") is None
+# =============================================================================
+# Widget helpers (revision-keyed; seeds come from the config)
+# =============================================================================
+
+def _num(key: str, label: str, *, seed, min_value=None, max_value=None, step=1,
+         on_change=None, help=None, disabled=False):
+    """Number input seeded once per revision from the config. A NaN (blank)
+    seed renders an empty cell. Seeds are clamped into the widget's range so
+    Streamlit never sees an out-of-range session_state value; the config keeps
+    the true value (it is what gets drawn)."""
+    wkey = _wk(key)
+    if wkey not in st.session_state:
+        if seed is None or ss.is_blank(seed):
+            st.session_state[wkey] = None
+        else:
+            s = int(seed)
+            if min_value is not None:
+                s = max(min_value, s)
+            if max_value is not None:
+                s = min(max_value, s)
+            st.session_state[wkey] = s
+    kwargs = {"key": wkey, "step": step}
+    if min_value is not None:
+        kwargs["min_value"] = min_value
+    if max_value is not None:
+        kwargs["max_value"] = max_value
+    if on_change is not None:
+        kwargs["on_change"] = on_change
+    if help is not None:
+        kwargs["help"] = help
+    if disabled:
+        kwargs["disabled"] = True
+    return st.number_input(label, **kwargs)
+
+
+def _lift_write(ci: int, bank: str, idx: int, new_lift: dict) -> None:
+    set_config(_replace_lift(st.session_state["config"], ci, bank, idx, new_lift))
+
+
+def _lift_num_cb(ci: int, bank: str, idx: int, field: str, key: str,
+                 reducer=None, clamp=None):
+    """on_change for a per-lift number input. Routes the edit through the given
+    pure reducer (sketch_state) so manual edits match Debbie's exactly. A blank
+    (None) widget stores NaN — the web's blank-cell sentinel. If blank sibling
+    cells make the linking math fail, just store the edited value raw."""
+    def cb():
+        raw = st.session_state.get(_wk(key))
+        cfg = st.session_state["config"]
+        lift = _get_lift(cfg, ci, bank, idx)
+        if raw is None:
+            _lift_write(ci, bank, idx, {**lift, field: float("nan")})
+            return
+        v = clamp(raw) if clamp else raw
+        try:
+            new_lift = reducer(lift, v) if reducer else {**lift, field: v}
+        except TypeError:
+            new_lift = {**lift, field: v}
+        _lift_write(ci, bank, idx, new_lift)
+    return cb
+
+
+def _config_write(partial: dict) -> None:
+    """Undoable write of global (non-core) config fields."""
+    set_config({**st.session_state["config"], **partial})
+
+
+def _core_write(ci: int, partial: dict) -> None:
+    """Undoable write of the given core's fields, recomputing separator
+    defaults when common_shaft flips (mirror of updateActiveCore)."""
+    cfg = st.session_state["config"]
+    cores = list(cfg["cores"])
+    nxt = {**cores[ci], **partial}
+    if "common_shaft" in partial and "separator_types_bank1" not in partial:
+        nxt["separator_types_bank1"] = ss.compute_default_separator_types(
+            nxt["bank1_lifts"], nxt["common_shaft"])
+    if "common_shaft" in partial and "separator_types_bank2" not in partial:
+        nxt["separator_types_bank2"] = ss.compute_default_separator_types(
+            nxt["bank2_lifts"], nxt["common_shaft"])
+    cores[ci] = nxt
+    set_config({**cfg, "cores": cores})
+
+
+def _set_bank_count(ci: int, bank: str, n: int) -> None:
+    """Resize a bank to n lifts (mirror of setNumBank1/2)."""
+    cfg = st.session_state["config"]
+    cores = list(cfg["cores"])
+    core = cores[ci]
+    key = "bank1_lifts" if bank == "bank1" else "bank2_lifts"
+    sep_key = "separator_types_bank1" if bank == "bank1" else "separator_types_bank2"
+    lifts = list(core[key])
+    while len(lifts) < n:
+        lifts.append(ss.make_default_lift("passenger", cfg["machine_type"]))
+    lifts = lifts[:n]
+    cores[ci] = {
+        **core,
+        key: lifts,
+        sep_key: ss.compute_default_separator_types(lifts, core["common_shaft"]),
+    }
+    set_config(ss.fill_blank_lift_ids({**cfg, "cores": cores}))
+
+
+def _parse_cabin_size(text: str):
+    """Fuzzy-parse a fire cabin "W x D" string (any separator/format) into
+    (width, depth). Port of parseCabinSize()."""
+    nums = re.findall(r"\d+(?:\.\d+)?", text or "")
+    if len(nums) < 2:
+        return None
+    w, d = float(nums[0]), float(nums[1])
+    if w <= 0 or d <= 0:
+        return None
+    return int(w), int(d)
 
 
 # =============================================================================
-# Section-view config form — port of the web SectionConfigForm.
+# Per-lift config form — config-driven port of the web LiftConfigForm
 # =============================================================================
 
-def render_section_config_form(machine_type: str) -> dict:
-    """Render the section-view config form; return its data dict."""
-    cleared = bool(st.session_state.get("form_cleared"))
-    sec_key = "section_data"
-    if sec_key not in st.session_state:
-        st.session_state[sec_key] = make_empty_section() if cleared else make_default_section()
-    S = st.session_state[sec_key]
+def render_lift_form(ci: int, bank: str, idx: int, machine_type: str,
+                     show_capacity: bool) -> None:
+    cfg = st.session_state["config"]
+    L = _get_lift(cfg, ci, bank, idx)
+    prefix = f"c{ci}_{bank}_{idx}"
+    is_fire = L["type"] == "fire"
+    mrl_style = ss.lift_is_side_cw(L, machine_type)
 
-    def _num(field, label, *, min_value=None, max_value=None, step=1):
-        wk = f"section_w_{field}"
-        if wk not in st.session_state:
-            if cleared or S.get(field) is None:
-                st.session_state[wk] = None
-            else:
-                s = int(S[field])
-                if min_value is not None:
-                    s = max(min_value, s)
-                if max_value is not None:
-                    s = min(max_value, s)
-                st.session_state[wk] = s
+    def num(field, label, *, reducer=None, clamp=None, seed=None, **kw):
+        key = f"{prefix}_{field}"
+        return _num(key, label,
+                    seed=seed if seed is not None else L.get(field),
+                    on_change=_lift_num_cb(ci, bank, idx, field, key,
+                                           reducer=reducer, clamp=clamp),
+                    **kw)
+
+    lid = (L.get("lift_id") or "").strip()
+    title = f"Lift {idx + 1} · {'Fire/Service' if is_fire else 'Passenger'}"
+    if lid:
+        title += f" · {lid}"
+
+    with st.expander(title, expanded=(idx == 0 and bank == "bank1")):
+
+        # Copy this lift's dims into the section view (and switch to it).
+        def _cb_copy_to_section(ci=ci, bank=bank, idx=idx):
+            c = st.session_state["config"]
+            lift = _get_lift(c, ci, bank, idx)
+            wall = c["cores"][ci]["wall_thickness_mm"]
+            set_config({**c, "section": ss.copy_lift_values_to_section(
+                c["section"], lift, wall)})
+            st.session_state["ui_section_source"] = f"c{ci}-b{'1' if bank == 'bank1' else '2'}-{idx}"
+            st.session_state["ui_active_view"] = "section"
+            st.session_state["section_image"] = None
+
+        st.button("Copy to Section", key=_wk(f"{prefix}_copy_sec"),
+                  on_click=_cb_copy_to_section)
+
+        # Lift ID (designation shown in the brief-spec table)
+        idkey = _wk(f"{prefix}_lift_id")
+        if idkey not in st.session_state:
+            st.session_state[idkey] = L.get("lift_id", "")
+
+        def _cb_lift_id():
+            c = st.session_state["config"]
+            lift = _get_lift(c, ci, bank, idx)
+            _lift_write(ci, bank, idx, {**lift, "lift_id": st.session_state[idkey]})
+
+        st.text_input("Lift ID", key=idkey, placeholder="e.g. PL-01",
+                      on_change=_cb_lift_id)
+
+        # Lift Type — rebuilds the lift at the new type's defaults, carrying the
+        # ID across (PL ⇄ FL/SL prefix swap when it was the canonical default).
+        tkey = _wk(f"{prefix}_type")
+        if tkey not in st.session_state:
+            st.session_state[tkey] = L["type"]
+
+        def _cb_type():
+            new_type = st.session_state[tkey]
+            c = st.session_state["config"]
+            lift = _get_lift(c, ci, bank, idx)
+            if lift["type"] == new_type:
+                return
+            rebuilt = ss.make_default_lift(new_type, c["machine_type"])
+            rebuilt["lift_id"] = ss.carry_lift_id(lift, new_type)
+            _lift_write(ci, bank, idx, rebuilt)
+
+        st.selectbox(
+            "Lift Type", options=["passenger", "fire"],
+            format_func=lambda x: "Fire/Service" if x == "fire" else "Passenger",
+            key=tkey, on_change=_cb_type,
+        )
+
+        # Double Car Entrance (fire only)
+        if is_fire:
+            dkey = _wk(f"{prefix}_double")
+            if dkey not in st.session_state:
+                st.session_state[dkey] = bool(L.get("double_entrance"))
+
+            def _cb_double():
+                c = st.session_state["config"]
+                lift = _get_lift(c, ci, bank, idx)
+                try:
+                    _lift_write(ci, bank, idx,
+                                ss.apply_double_entrance(lift, st.session_state[dkey]))
+                except TypeError:
+                    _lift_write(ci, bank, idx,
+                                {**lift, "double_entrance": st.session_state[dkey]})
+
+            st.checkbox("Double Car Entrance", key=dkey, on_change=_cb_double)
+
+        # Shaft Dimensions
+        st.markdown("**Shaft Dimensions**")
+        if mrl_style:
+            width_formula = ("Min = CWT Bracket Spacing + Unfinished Car Width "
+                             "(finished + 50) + Car Bracket Spacing")
+            if is_fire:
+                width_formula += ". Fire lifts: at least 2700, or 2450 with telescopic doors."
+        else:
+            width_formula = ("Min = Left Car Bracket Spacing + Unfinished Car Width "
+                             "(finished + 50) + Right Car Bracket Spacing")
+        if L.get("double_entrance"):
+            depth_formula = ("Auto-computed: Door Zone + Finished Car Depth + Door Zone, "
+                             "where Door Zone = 2 x Door Panel + Door Gap")
+        elif mrl_style:
+            depth_formula = ("Min = Unfinished Car Depth (finished + 25) + "
+                             "2 x Door Panel + Door Gap + Rear Clearance (200)")
+        else:
+            depth_formula = ("Min = 2 x Door Panel + Door Gap + Unfinished Car Depth "
+                             "(finished + 25) + CWT Gap + CWT Bracket Spacing + "
+                             "CWT Wall Gap")
+        c1, c2 = st.columns(2)
+        with c1:
+            num("shaft_width", "Shaft Width (mm)", step=10, help=width_formula,
+                reducer=lambda lf, v: ss.apply_shaft_width(lf, v, machine_type))
+        with c2:
+            num("shaft_depth", "Shaft Depth (mm)", step=10, help=depth_formula,
+                disabled=bool(L.get("double_entrance")),
+                reducer=lambda lf, v: ss.apply_shaft_depth(lf, v, machine_type))
+
+        # Swap bracket sides — MRL-style side-bracket lifts only.
+        if mrl_style:
+            swkey = _wk(f"{prefix}_swap")
+            if swkey not in st.session_state:
+                st.session_state[swkey] = bool(L.get("swap_brackets", False))
+
+            def _cb_swap():
+                c = st.session_state["config"]
+                lift = _get_lift(c, ci, bank, idx)
+                _lift_write(ci, bank, idx,
+                            {**lift, "swap_brackets": st.session_state[swkey]})
+
+            st.checkbox("Swap brackets", key=swkey, on_change=_cb_swap,
+                        help="Swap positions of the CWT bracket and car bracket with each other.")
+
+        # Capacity (conditional)
+        if show_capacity:
+            cap_seed = L.get("capacity")
+            if cap_seed is None:
+                cap_seed = 1600 if is_fire else 1350
+            num("capacity", "Capacity (KG)", min_value=100, max_value=10000,
+                step=50, seed=cap_seed)
+
+        # Car Dimensions
+        st.markdown("**Car Dimensions**")
+        if is_fire:
+            # Free-entry cabin combobox: pick a preset or type any "W x D" size
+            # (fuzzy-parsed). No size is enforced — any value is drawable.
+            ckey = _wk(f"{prefix}_cabin")
+            if ckey not in st.session_state:
+                w0, d0 = L.get("width"), L.get("depth")
+                st.session_state[ckey] = (
+                    f"{int(w0)} x {int(d0)}"
+                    if w0 is not None and d0 is not None
+                    and not ss.is_blank(w0) and not ss.is_blank(d0) else ""
+                )
+
+            def _cb_cabin():
+                parsed = _parse_cabin_size(st.session_state[ckey])
+                if not parsed:
+                    bump_rev()  # reset the text to the current cabin size
+                    return
+                c = st.session_state["config"]
+                lift = _get_lift(c, ci, bank, idx)
+                try:
+                    _lift_write(ci, bank, idx,
+                                ss.apply_fire_cabin(lift, parsed[0], parsed[1], machine_type))
+                except TypeError:
+                    _lift_write(ci, bank, idx,
+                                {**lift, "width": parsed[0], "depth": parsed[1]})
+
+            presets = ", ".join(f"{w} x {d}" for w, d in FIRE_LIFT_CABIN_SIZES)
+            st.text_input(
+                "Cabin Size (W x D)", key=ckey, placeholder="e.g. 1400 x 2400",
+                on_change=_cb_cabin,
+                help=f"Standard sizes: {presets}. Any custom \"W x D\" is accepted.",
+            )
+        else:
+            cc1, cc2 = st.columns(2)
+            with cc1:
+                num("width", "Car Width (mm)", step=10,
+                    reducer=lambda lf, v: ss.apply_car_width(lf, v, machine_type))
+            with cc2:
+                num("depth", "Car Depth (mm)", step=10)
+
+        # Shaft Spacing — always editable, zero-sum, max(0, .) only
+        st.markdown("**Shaft Spacing**")
+        if mrl_style:
+            bc1, bc2 = st.columns(2)
+            with bc1:
+                num("cw_bracket_width", "CWT Bracket Spacing (mm)", step=25,
+                    help="Car bracket auto-adjusts.",
+                    reducer=ss.apply_cw_bracket,
+                    seed=L.get("cw_bracket_width") if L.get("cw_bracket_width") is not None
+                    else ss.MRL_CW_BRACKET_MIN)
+            with bc2:
+                num("car_bracket_width", "Car Bracket Spacing (mm)", step=25,
+                    help="CWT bracket auto-adjusts.",
+                    reducer=ss.apply_car_bracket,
+                    seed=L.get("car_bracket_width") if L.get("car_bracket_width") is not None
+                    else ss.MRL_CAR_BRACKET_MIN)
+        else:
+            st.caption("Width")
+            wc1, wc2 = st.columns(2)
+            with wc1:
+                num("mra_left_bracket", "Left Car Bracket Spacing (mm)", step=25,
+                    reducer=ss.apply_mra_left_bracket,
+                    seed=L.get("mra_left_bracket") if L.get("mra_left_bracket") is not None
+                    else ss.MRA_CAR_BRACKET_MIN)
+            with wc2:
+                num("mra_right_bracket", "Right Car Bracket Spacing (mm)", step=25,
+                    reducer=ss.apply_mra_right_bracket,
+                    seed=L.get("mra_right_bracket") if L.get("mra_right_bracket") is not None
+                    else ss.MRA_CAR_BRACKET_MIN)
+            st.caption("Depth")
+            dc1, dc2 = st.columns(2)
+            with dc1:
+                num("mra_cw_bracket_depth", "CWT Bracket Spacing (mm)", step=25,
+                    reducer=ss.apply_mra_cw_depth,
+                    seed=L.get("mra_cw_bracket_depth") if L.get("mra_cw_bracket_depth") is not None
+                    else ss.MRA_CW_BRACKET_DEPTH_MIN)
+            with dc2:
+                num("mra_cw_gap", "CWT Gap (mm)", step=25,
+                    reducer=ss.apply_mra_cw_gap,
+                    seed=L.get("mra_cw_gap") if L.get("mra_cw_gap") is not None
+                    else ss.MRA_CW_GAP_MIN)
+            num("mra_cw_wall_gap", "CWT Wall Gap (mm)", step=25,
+                help="Space between rear wall and CWT box. CWT gap auto-adjusts.",
+                reducer=ss.apply_mra_cw_wall_gap,
+                seed=L.get("mra_cw_wall_gap") if L.get("mra_cw_wall_gap") is not None
+                else ss.MRA_CW_WALL_GAP_MIN)
+
+        # Car guide rails (decoupled from brackets; arrow shows bracket + rail)
+        rc1, rc2 = st.columns(2)
+        with rc1:
+            num("rail_width_left", "Left Rail Spacing (mm)", step=5,
+                help="Bracket on this side auto-adjusts; arrow shows bracket + rail.",
+                reducer=lambda lf, v: ss.apply_rail_left(lf, v, machine_type),
+                seed=L.get("rail_width_left") if L.get("rail_width_left") is not None
+                else ss.RAIL_WIDTH_DEFAULT)
+        with rc2:
+            num("rail_width_right", "Right Rail Spacing (mm)", step=5,
+                help="Bracket on this side auto-adjusts.",
+                reducer=lambda lf, v: ss.apply_rail_right(lf, v, machine_type),
+                seed=L.get("rail_width_right") if L.get("rail_width_right") is not None
+                else ss.RAIL_WIDTH_DEFAULT)
+
+        # CW box visual dimensions (free inputs; the box floats inside its zone)
+        if mrl_style:
+            cwb1, cwb2 = st.columns(2)
+            with cwb1:
+                num("cw_box_width", "CWT Box Width (mm)", step=25,
+                    clamp=lambda v: max(0, v),
+                    seed=L.get("cw_box_width") if L.get("cw_box_width") is not None
+                    else ss.CW_BOX_WIDTH_DEFAULT)
+            with cwb2:
+                num("cw_box_depth", "CWT Box Depth (mm)", step=25,
+                    clamp=lambda v: max(0, v),
+                    seed=L.get("cw_box_depth") if L.get("cw_box_depth") is not None
+                    else ss.CW_BOX_DEPTH_DEFAULT)
+        else:
+            num("mra_cw_box_width", "CWT Box Spacing (mm)", step=25,
+                clamp=lambda v: max(0, v),
+                help="Width of the rear CWT box (depth = CWT Bracket Spacing).",
+                seed=L.get("mra_cw_box_width") if L.get("mra_cw_box_width") is not None
+                else ss.MRA_CW_BOX_WIDTH_DEFAULT)
+
+        # Door Settings
+        st.markdown("**Door Settings**")
+        dwc1, dwc2 = st.columns(2)
+        with dwc1:
+            num("door_width", "Door Width (mm)", min_value=700, max_value=2000,
+                step=50, reducer=ss.apply_door_width)
+        with dwc2:
+            num("door_height", "Door Height (mm)", min_value=1500, max_value=3500, step=50)
+
+        num("door_gap", "Running Clearance (mm)", min_value=0, max_value=500, step=5,
+            help="Clearance between the landing and car door.",
+            reducer=ss.apply_door_gap,
+            seed=L.get("door_gap") if L.get("door_gap") is not None else ss.DOOR_GAP)
+
+        # Fire lift: door opening type
+        if is_fire:
+            otkey = _wk(f"{prefix}_door_opening_type")
+            if otkey not in st.session_state:
+                st.session_state[otkey] = L["door_opening_type"]
+
+            def _cb_door_type():
+                c = st.session_state["config"]
+                lift = _get_lift(c, ci, bank, idx)
+                new_type = st.session_state[otkey]
+                try:
+                    _lift_write(ci, bank, idx, ss.apply_door_type(lift, new_type))
+                except TypeError:
+                    _lift_write(ci, bank, idx, {**lift, "door_opening_type": new_type})
+
+            st.selectbox(
+                "Door Opening Type", options=["centre", "telescopic"],
+                format_func=lambda x: "Telescopic Opening" if x == "telescopic" else "Centre Opening",
+                key=otkey, on_change=_cb_door_type,
+            )
+
+        if L["door_opening_type"] == "telescopic":
+            tele_left_seed = L.get("telescopic_left_ext")
+            if tele_left_seed is None and L.get("door_width") is not None \
+                    and not ss.is_blank(L.get("door_width")):
+                tele_left_seed = int(0.5 * L["door_width"]) + ss.TELESCOPIC_LEFT_EXT_EXTRA
+            tc1, tc2 = st.columns(2)
+            with tc1:
+                num("telescopic_left_ext", "Left Extension (mm)", min_value=50,
+                    max_value=2000, step=25, seed=tele_left_seed)
+            with tc2:
+                num("telescopic_right_ext", "Right Extension (mm)", min_value=50,
+                    max_value=1000, step=25,
+                    seed=L.get("telescopic_right_ext") if L.get("telescopic_right_ext") is not None
+                    else ss.TELESCOPIC_RIGHT_EXT)
+            num("door_panel_thickness", "Door Panel Thickness (mm)", min_value=50,
+                max_value=300, step=10, reducer=ss.apply_door_panel_thickness)
+        else:
+            panel_seed = L.get("door_panel_length")
+            if panel_seed is None and L.get("door_width") is not None \
+                    and L.get("shaft_width") is not None \
+                    and not ss.is_blank(L.get("door_width")) \
+                    and not ss.is_blank(L.get("shaft_width")):
+                panel_seed = min(2 * L["door_width"] + 2 * ss.DEFAULT_DOOR_EXTENSION,
+                                 L["shaft_width"])
+            pc1, pc2 = st.columns(2)
+            with pc1:
+                # No min/max on the widget so an auto-grown value past 6000
+                # doesn't raise; user edits are clamped to [500, 6000].
+                num("door_panel_length", "Door Panel Length (mm)", step=50,
+                    clamp=lambda v: max(500, min(6000, v)), seed=panel_seed)
+            with pc2:
+                num("door_panel_thickness", "Door Panel Thickness (mm)", min_value=50,
+                    max_value=300, step=10, reducer=ss.apply_door_panel_thickness)
+
+        sc1, sc2 = st.columns(2)
+        with sc1:
+            num("structural_opening_width", "Structural Opening W (mm)",
+                min_value=800, max_value=3000, step=50)
+        with sc2:
+            num("structural_opening_height", "Structural Opening H (mm)",
+                min_value=1500, max_value=4000, step=50)
+
+        # Door horizontal offset from cabin centre (X axis). No upper bound —
+        # the user owns visual correctness, even if parts overlap.
+        oc1, oc2 = st.columns(2)
+        with oc1:
+            num("door_offset_mm", "Door Centre Offset (mm)", min_value=0, step=25,
+                help="Shift the door (opening, jambs, panels, returns) left/right "
+                     "from the cabin centre. Overlap is allowed.")
+        with oc2:
+            odkey = _wk(f"{prefix}_door_offset_direction")
+            if odkey not in st.session_state:
+                st.session_state[odkey] = L.get("door_offset_direction", "right")
+
+            def _cb_offset_dir():
+                c = st.session_state["config"]
+                lift = _get_lift(c, ci, bank, idx)
+                _lift_write(ci, bank, idx,
+                            {**lift, "door_offset_direction": st.session_state[odkey]})
+
+            st.selectbox(
+                "Offset Direction", options=["left", "right"],
+                format_func=lambda x: x.capitalize(),
+                key=odkey, on_change=_cb_offset_dir,
+            )
+
+
+# =============================================================================
+# Section config form — config-driven port of the web SectionConfigForm
+# =============================================================================
+
+def render_section_form(machine_type: str) -> None:
+    cfg = st.session_state["config"]
+    S = cfg["section"]
+
+    def num(field, label, *, seed=None, **kw):
+        key = f"section_{field}"
 
         def cb():
-            S[field] = st.session_state[wk]
+            raw = st.session_state.get(_wk(key))
+            c = st.session_state["config"]
+            value = float("nan") if raw is None else raw
+            set_config({**c, "section": {**c["section"], field: value}})
 
-        kwargs = {"key": wk, "step": step, "on_change": cb}
-        if min_value is not None:
-            kwargs["min_value"] = min_value
-        if max_value is not None:
-            kwargs["max_value"] = max_value
-        return st.number_input(label, **kwargs)
+        return _num(key, label,
+                    seed=seed if seed is not None else S.get(field),
+                    on_change=cb, **kw)
 
     c1, c2 = st.columns(2)
     with c1:
-        _num("shaft_width", "Shaft Depth (mm)", step=10)
+        num("shaft_depth", "Shaft Depth (mm)", step=10)
     with c2:
-        _num("wall_thickness", "Wall Thickness (mm)", min_value=100, max_value=500, step=25)
+        num("wall_thickness", "Wall Thickness (mm)", min_value=100, max_value=500, step=25)
 
     c3, c4 = st.columns(2)
     with c3:
-        _num("pit_slab", "Pit Slab (mm)", min_value=100, max_value=500, step=25)
+        num("pit_slab", "Pit Slab (mm)", min_value=100, max_value=500, step=25)
     with c4:
-        _num("pit_depth", "Pit Depth (mm)", min_value=500, max_value=3000, step=50)
+        num("pit_depth", "Pit Depth (mm)", min_value=500, max_value=10000, step=50)
 
     c5, c6 = st.columns(2)
     with c5:
-        _num("travel_height", "Travel Height (mm)", min_value=5000, max_value=200000, step=1000)
+        num("travel_height", "Travel Height (mm)", min_value=5000, max_value=200000, step=1000)
     with c6:
-        _num("overhead_clearance", "Headroom (mm)", min_value=2000, max_value=10000, step=100)
+        num("overhead_clearance", "Headroom (mm)", min_value=2000, max_value=10000, step=100)
 
     c7, c8 = st.columns(2)
     with c7:
-        _num("door_height", "Door Opening Height (mm)", min_value=1500, max_value=3500, step=50)
+        num("door_height", "Door Opening Height (mm)", min_value=1500, max_value=3500, step=50)
     with c8:
-        _num("structural_opening_height", "Structural Opening Height (mm)", min_value=1500, max_value=4000, step=50)
+        num("structural_opening_height", "Structural Opening Height (mm)",
+            min_value=1500, max_value=4000, step=50)
 
-    machine_room_height = None
     if machine_type == "mra":
         c9, _ = st.columns(2)
         with c9:
-            _num("machine_room_height", "Machine Room Height (mm)", min_value=2000, max_value=6000, step=100)
-        machine_room_height = S["machine_room_height"]
+            num("machine_room_height", "Machine Room Height (mm)",
+                min_value=2000, max_value=6000, step=100,
+                seed=S.get("machine_room_height") if S.get("machine_room_height") is not None
+                else 3000)
 
-    return {
-        "shaft_width": S["shaft_width"],
-        "wall_thickness": S["wall_thickness"],
-        "pit_slab": S["pit_slab"],
-        "pit_depth": S["pit_depth"],
-        "travel_height": S["travel_height"],
-        "overhead_clearance": S["overhead_clearance"],
-        "door_height": S["door_height"],
-        "structural_opening_height": S["structural_opening_height"],
-        "machine_room_height": machine_room_height,
-    }
 
+# =============================================================================
+# Section source lift — port of resolveSectionLift / selectSectionLift
+# =============================================================================
+
+SECTION_KEY_RE = re.compile(r"^c(\d+)-b([12])-(\d+)$")
+
+
+def resolve_section_lift(cfg: dict):
+    """Resolve the section's selected lift (and its core) from the source key;
+    fall back to the first passenger across cores, else the very first lift.
+    Returns (lift, core)."""
+    m = SECTION_KEY_RE.match(st.session_state.get("ui_section_source") or "")
+    if m:
+        ci, b, i = int(m.group(1)), m.group(2), int(m.group(3))
+        if ci < len(cfg["cores"]):
+            core = cfg["cores"][ci]
+            lifts = core["bank1_lifts"] if b == "1" else core["bank2_lifts"]
+            if i < len(lifts):
+                return lifts[i], core
+    for core in cfg["cores"]:
+        for lift in core["bank1_lifts"]:
+            if lift["type"] == "passenger":
+                return lift, core
+    return cfg["cores"][0]["bank1_lifts"][0], cfg["cores"][0]
+
+
+# =============================================================================
+# PNG generation — port of the KARR AI /api/sketches preview endpoints
+# =============================================================================
+
+def generate_plan(plan_filter: str = None) -> None:
+    """Generate the active core's plan PNG into session state. Port of the
+    web handleGenerate (plan branch) + the /preview/plan endpoint."""
+    cfg = st.session_state["config"]
+    ci = _active_core_index()
+    core = cfg["cores"][ci]
+    multi_core = len(cfg["cores"]) > 1
+    variant = plan_filter or st.session_state["ui_plan_variant"]
+
+    core_lifts = [*core["bank1_lifts"], *core["bank2_lifts"]]
+    has_both = (any(lf["type"] == "passenger" for lf in core_lifts)
+                and any(lf["type"] == "fire" for lf in core_lifts))
+
+    # Block generation while any input cell is left blank (NaN sentinel).
+    lifts_to_check = core_lifts if core["arrangement"] == "Facing" else core["bank1_lifts"]
+    blank = any(ss.has_blank_number(lf) for lf in lifts_to_check)
+    if ss.is_blank(core["wall_thickness_mm"]):
+        blank = True
+    if core["arrangement"] == "Facing" and ss.is_blank(core["lobby_width_mm"]):
+        blank = True
+    if blank:
+        st.session_state["plan_error"] = (
+            "Some input cells are empty. Fill in all fields before generating.")
+        st.session_state["plan_image"] = None
+        return
+
+    try:
+        mt = cfg["machine_type"]
+        wall = core["wall_thickness_mm"]
+        bank1_configs = [build_lift_config(lf, mt, wall) for lf in core["bank1_lifts"]]
+        bank2_configs = ([build_lift_config(lf, mt, wall) for lf in core["bank2_lifts"]]
+                         if core["arrangement"] == "Facing" else [])
+
+        sep1 = core["separator_types_bank1"] or None
+        sep2 = core["separator_types_bank2"] or None
+
+        # Optional single-type filter for the split-plan carousel. The subset
+        # re-derives its own separators (None); collapse to inline when it
+        # lives entirely in bank 2.
+        lift_filter = variant if (cfg["split_lift_types"] and has_both) else "all"
+        if lift_filter in ("passenger", "fire"):
+            bank1_configs = [c for c in bank1_configs if c.lift_type == lift_filter]
+            bank2_configs = [c for c in bank2_configs if c.lift_type == lift_filter]
+            sep1 = sep2 = None
+            if not bank1_configs:
+                bank1_configs, bank2_configs = bank2_configs, []
+            if not bank1_configs:
+                st.session_state["plan_error"] = f"No {lift_filter} lift to preview"
+                st.session_state["plan_image"] = None
+                return
+
+        if core["arrangement"] == "Facing" and bank2_configs:
+            sketch = LiftShaftSketch(
+                lifts=bank1_configs,
+                lifts_bank2=bank2_configs,
+                lobby_width=core["lobby_width_mm"],
+                is_common_shaft=core["common_shaft"],
+                wall_thickness=wall,
+                separator_types_bank1=sep1,
+                separator_types_bank2=sep2,
+            )
+        else:
+            sketch = LiftShaftSketch(
+                lifts=bank1_configs,
+                is_common_shaft=core["common_shaft"],
+                wall_thickness=wall,
+                separator_types_bank1=sep1,
+            )
+
+        brief_title = "BRIEF SPECIFICATION"
+        if multi_core:
+            brief_title += f" — {core['name']}"
+
+        font_max = ss.plan_dimension_font_max(
+            core["arrangement"], len(core["bank1_lifts"]), len(core["bank2_lifts"]))
+
+        img_bytes = sketch.to_bytes(
+            show_hatching=cfg["show_hatching"],
+            show_dimensions=cfg["show_dimensions"],
+            show_centerlines=cfg["show_centerlines"],
+            show_brackets=cfg["show_brackets"],
+            show_capacity=cfg["show_capacity"],
+            show_accessibility=cfg["show_accessibility"],
+            show_lift_doors=cfg["show_lift_doors"],
+            show_lift_id=cfg["show_lift_id"],
+            show_brief_spec=cfg["show_brief_spec"],
+            brief_spec_title=brief_title,
+            font_scale=ss.clamp_dimension_font_scale(cfg["dimension_font_scale"], font_max),
+        )
+        st.session_state["plan_image"] = img_bytes
+        st.session_state["plan_error"] = None
+
+    except ValueError as e:
+        st.session_state["plan_error"] = str(e)
+        st.session_state["plan_image"] = None
+    except Exception as e:  # noqa: BLE001 — surface unexpected errors in the UI
+        st.session_state["plan_error"] = f"Unexpected error: {e}"
+        st.session_state["plan_image"] = None
+
+
+def generate_section() -> None:
+    """Generate the section PNG into session state. Port of the web
+    handleGenerate (section branch) + the /preview/section endpoint."""
+    cfg = st.session_state["config"]
+    section = cfg["section"]
+    pick_lift, pick_core = resolve_section_lift(cfg)
+    multi_core = len(cfg["cores"]) > 1
+
+    if ss.has_blank_number(pick_lift) or ss.has_blank_number(section):
+        st.session_state["section_error"] = (
+            "Some input cells are empty. Fill in all fields before generating.")
+        st.session_state["section_image"] = None
+        return
+
+    try:
+        mt = cfg["machine_type"]
+        lift_config = build_lift_config(pick_lift, mt, section["wall_thickness"])
+
+        # The section form's Shaft Depth always overrides the lift's depth.
+        lift_config.shaft_depth_override = section["shaft_depth"]
+
+        section_kwargs = {
+            "pit_slab": section["pit_slab"],
+            "pit_depth": section["pit_depth"],
+            "overhead_clearance": section["overhead_clearance"],
+            "travel_height": section["travel_height"],
+            "door_height": section["door_height"],
+            "structural_opening_height": section["structural_opening_height"],
+        }
+        if mt == "mra" and section.get("machine_room_height") is not None:
+            section_kwargs["machine_room_height"] = section["machine_room_height"]
+
+        section_sketch = LiftSectionSketch(
+            lift_config=lift_config,
+            section_config=SectionConfig(**section_kwargs),
+        )
+
+        brief_title = "BRIEF SPECIFICATION"
+        if multi_core:
+            brief_title += f" — {pick_core['name']}"
+
+        img_bytes = section_sketch.to_bytes(
+            show_hatching=cfg["section_show_hatching"],
+            show_dimensions=cfg["section_show_dimensions"],
+            show_break_lines=cfg["section_show_break_lines"],
+            show_mrl_machine=cfg["section_show_machine"],
+            show_brief_spec=cfg["show_brief_spec"],
+            brief_spec_title=brief_title,
+            font_scale=ss.clamp_dimension_font_scale(
+                cfg["section_dimension_font_scale"], ss.SECTION_DIM_FONT_MAX),
+        )
+        st.session_state["section_image"] = img_bytes
+        st.session_state["section_error"] = None
+
+    except ValueError as e:
+        st.session_state["section_error"] = str(e)
+        st.session_state["section_image"] = None
+    except Exception as e:  # noqa: BLE001
+        st.session_state["section_error"] = f"Unexpected error: {e}"
+        st.session_state["section_image"] = None
+
+
+def regenerate_active_view() -> None:
+    """Re-render the current view's preview (after Debbie edits / undo / redo),
+    mirroring the web's debbieTick effect."""
+    if st.session_state["ui_active_view"] == "plan":
+        generate_plan()
+    else:
+        generate_section()
+
+
+# =============================================================================
+# Debbie — AI sketch-editing assistant (port of DebbiePanel + use-debbie)
+# =============================================================================
+
+DEBBIE_INTRO = (
+    "Hi, I'm Debbie. Tell me how to tweak the sketch — e.g. \"centre the doors "
+    "for PL-02\", \"make Core 1 facing\", or \"set the pit depth to 1500\". "
+    "I'll ask if I need more detail."
+)
+
+DEBBIE_RATE_LIMIT_PER_MIN = 30
+
+
+def _debbie_rate_limited() -> bool:
+    now = time.monotonic()
+    hits = [t for t in st.session_state["debbie_hits"] if now - t <= 60.0]
+    st.session_state["debbie_hits"] = hits
+    if len(hits) >= DEBBIE_RATE_LIMIT_PER_MIN:
+        return True
+    hits.append(now)
+    return False
+
+
+def debbie_send(text: str) -> None:
+    """One Debbie turn: call the model, validate + apply returned operations
+    through the shared interpreter, re-render the preview. Port of
+    use-debbie.ts send()."""
+    trimmed = (text or "").strip()
+    if not trimmed:
+        return
+
+    msgs = st.session_state["debbie_msgs"]
+    msgs.append({"role": "user", "content": trimmed})
+    st.session_state["debbie_pending"] = None
+
+    if _debbie_rate_limited():
+        msgs.append({"role": "assistant",
+                     "content": "Too many requests — give Debbie a moment."})
+        return
+
+    cfg = st.session_state["config"]
+    ci = _active_core_index()
+    result = debbie_agent.run_debbie_turn(
+        messages=msgs,
+        config=cfg,
+        active_view=st.session_state["ui_active_view"],
+        active_core=cfg["cores"][ci]["name"],
+    )
+
+    reply = (result.get("assistant_text") or "").strip()
+    operations = result.get("operations") or []
+
+    if operations:
+        new_cfg, op_results = dops.apply_operations(cfg, operations, active_core=ci)
+        applied = [r for r in op_results if r["status"] == "applied"]
+        rejected = [r for r in op_results if r["status"] == "rejected"]
+        warnings = "\n".join(f"⚠️ {r['detail']}" for r in rejected)
+
+        if applied:
+            # Something changed — apply it (undoable, shared history with the
+            # manual form), re-render, keep the model's summary, and append any
+            # partial rejections as warnings.
+            set_config(new_cfg)
+            regenerate_active_view()
+            if warnings:
+                reply += ("\n\n" if reply else "") + warnings
+        elif rejected:
+            # Nothing applied — the model's optimistic summary would contradict
+            # reality, so replace it with the actual reasons.
+            reply = "I couldn't make that change:\n" + warnings
+
+    if result.get("pending_clarification"):
+        st.session_state["debbie_pending"] = result["pending_clarification"]
+
+    msgs.append({"role": "assistant", "content": reply or "Done."})
+
+
+def render_debbie_panel() -> None:
+    """Debbie chat UI (chat clears on reload — ephemeral by design)."""
+    with st.expander("✨ Debbie — AI sketch assistant", expanded=False):
+        if not debbie_agent.is_configured():
+            st.info("Debbie needs an OpenAI key. Set OPENAI_API_KEY in "
+                    ".streamlit/secrets.toml (or the environment) to enable her.")
+            return
+
+        with st.container():
+            st.markdown(f"*{DEBBIE_INTRO}*")
+            for m in st.session_state["debbie_msgs"]:
+                with st.chat_message("user" if m["role"] == "user" else "assistant"):
+                    st.markdown(m["content"])
+
+        # Clarification quick-replies
+        pending = st.session_state.get("debbie_pending")
+        if pending and pending.get("options"):
+            opt_cols = st.columns(min(4, len(pending["options"])))
+            for i, opt in enumerate(pending["options"][:8]):
+                with opt_cols[i % len(opt_cols)]:
+                    if st.button(opt, key=_wk(f"debbie_opt_{i}")):
+                        with st.spinner("Debbie is thinking…"):
+                            debbie_send(opt)
+                        st.rerun()
+
+        with st.form(key=_wk("debbie_form"), clear_on_submit=True):
+            fc1, fc2 = st.columns([0.8, 0.2])
+            with fc1:
+                text = st.text_input("Message", key=_wk("debbie_input"),
+                                     placeholder="Tell Debbie what to change…",
+                                     label_visibility="collapsed")
+            with fc2:
+                submitted = st.form_submit_button("Send", width="stretch")
+        st.caption("Chat clears on reload.")
+
+        if submitted and text.strip():
+            with st.spinner("Debbie is thinking…"):
+                debbie_send(text)
+            st.rerun()
 
 def require_password() -> bool:
     """Render the gate UI if needed. Returns True when authenticated.
@@ -1708,36 +1725,89 @@ html, body, .stApp, .stApp [data-testid="stAppViewContainer"] {
 # 10% slider step and taken as the min across MRL/MRA. The slider's max_value is
 # set from this so over-scaling that overlaps labels is simply not selectable —
 # no caption needed; the control's range is the limit.
-_DIM_FONT_MAX_INLINE = {1: 200, 2: 150, 3: 110, 4: 100}
-_DIM_FONT_MAX_FACING = {1: 110, 2: 110, 3: 110, 4: 100}
-_DIM_FONT_MAX_SECTION = 160
 
 
-def _dim_font_max_pct(arrangement: str, n_bank1: int, n_bank2: int) -> int:
-    """Largest dimension-font % that keeps labels collision-free for this layout."""
-    if arrangement == "Facing":
-        n = max(n_bank1, n_bank2)
-        return _DIM_FONT_MAX_FACING.get(min(n, 4), 110)
-    return _DIM_FONT_MAX_INLINE.get(min(n_bank1, 4), 110)
+# =============================================================================
+# Sidebar widgets bound to the config
+# =============================================================================
+
+def _bool_option(field: str, label: str) -> None:
+    """Checkbox bound to a top-level boolean config field (undoable)."""
+    k = _wk(f"opt_{field}")
+    if k not in st.session_state:
+        st.session_state[k] = bool(st.session_state["config"][field])
+
+    def cb():
+        _config_write({field: st.session_state[k]})
+
+    st.checkbox(label, key=k, on_change=cb)
 
 
-def _dim_font_slider(label_max: int, state_key: str):
-    """Render the dimension-font slider with an adaptive max; clamp stored value
-    into range first so Streamlit never errors when the ceiling drops."""
-    help_txt = ("Scale the dimension label text. Upper limit adapts to the layout")
-    if state_key in st.session_state:
-        # Clamp existing value into the (possibly lowered) range. Omit `value` so
-        # Streamlit doesn't warn about setting a default alongside session_state.
-        st.session_state[state_key] = min(st.session_state[state_key], label_max)
-        return st.slider(
-            "Font Size",
-            min_value=50, max_value=label_max, step=10, key=state_key, help=help_txt,
-        )
-    return st.slider(
-        "Font Size",
-        min_value=50, max_value=label_max, value=100, step=10, key=state_key, help=help_txt,
-    )
+def _dim_font_slider(max_pct: int, config_field: str) -> None:
+    """Percent slider bound to a font-scale config field (stored as a float).
+    The upper limit adapts to the layout so over-scaling that overlaps labels
+    is simply not selectable."""
+    cfg = st.session_state["config"]
+    k = _wk(f"font_{config_field}")
+    if k not in st.session_state:
+        scale = ss.clamp_dimension_font_scale(cfg[config_field], max_pct / 100)
+        pct = int(round(scale * 100 / 10) * 10)
+        st.session_state[k] = min(max_pct, max(50, pct))
+    else:
+        st.session_state[k] = min(st.session_state[k], max_pct)
 
+    def cb():
+        _config_write({config_field: st.session_state[k] / 100})
+
+    st.slider("Font Size", min_value=50, max_value=max_pct, step=10, key=k,
+              on_change=cb,
+              help="Scale the dimension label text. Upper limit adapts to the layout")
+
+
+def _clear_all() -> None:
+    """Empty every input cell (NaN sentinel) — port of handleClearAll.
+    cabin_height has no input so it is left intact; structure, display options
+    and lift IDs survive. Undoable."""
+    cfg = st.session_state["config"]
+    cores = [{
+        **core,
+        "bank1_lifts": [ss.blank_numeric_fields(lf, skip=("cabin_height",))
+                        for lf in core["bank1_lifts"]],
+        "bank2_lifts": [ss.blank_numeric_fields(lf, skip=("cabin_height",))
+                        for lf in core["bank2_lifts"]],
+        "wall_thickness_mm": float("nan"),
+        "lobby_width_mm": float("nan"),
+    } for core in cfg["cores"]]
+    set_config({**cfg, "cores": cores, "section": ss.blank_numeric_fields(cfg["section"])})
+    st.session_state["plan_error"] = None
+    st.session_state["section_error"] = None
+
+
+def _restore_defaults() -> None:
+    """Reset the whole config to defaults (undoable) — port of handleRestoreDefaults."""
+    set_config(ss.make_default_config())
+    st.session_state["ui_active_core"] = 0
+    st.session_state["plan_error"] = None
+    st.session_state["section_error"] = None
+
+
+def _undo_clicked() -> None:
+    undo_config()
+    st.session_state["plan_error"] = None
+    st.session_state["section_error"] = None
+    regenerate_active_view()
+
+
+def _redo_clicked() -> None:
+    redo_config()
+    st.session_state["plan_error"] = None
+    st.session_state["section_error"] = None
+    regenerate_active_view()
+
+
+# =============================================================================
+# Main app
+# =============================================================================
 
 def main():
     st.set_page_config(
@@ -1752,29 +1822,15 @@ def main():
         st.stop()
 
     inject_brand_theme()
+    init_state()
+    cleanup_old_widget_keys()
 
     st.html('<h1 class="main-brand-title">Drawing Debbie</h1>')
 
-    def _clear_all():
-        """Empty every input cell and reset options to defaults. Wipes all
-        session state (except auth), then flags the form cleared so the inputs
-        re-seed blank instead of with their defaults. Runs as the button's
-        on_click — before any widget is re-instantiated this run, so deleting
-        widget keys is safe."""
-        for k in list(st.session_state.keys()):
-            if k != "authenticated":
-                del st.session_state[k]
-        st.session_state["form_cleared"] = True
+    cfg = st.session_state["config"]
+    st.session_state["ui_active_core"] = _active_core_index()  # clamp after core removals
 
-    def _restore_defaults():
-        """Reset every input back to its default value. Same wipe as Clear All
-        but leaves form_cleared off, so cells re-seed with defaults (not blank)."""
-        for k in list(st.session_state.keys()):
-            if k != "authenticated":
-                del st.session_state[k]
-        st.session_state["form_cleared"] = False
-
-    # Sidebar configuration
+    # ── Sidebar ──
     with st.sidebar:
         # Brand block — logo + title + subtitle. The logo is inlined as a
         # base64 <img> (not st.image) to preserve source quality on hi-DPI.
@@ -1791,388 +1847,429 @@ def main():
         st.header("Configuration")
 
         # View selector
-        active_view = st.radio(
-            "View",
-            options=["Plan View", "Section View"],
-            index=0,
-            key="active_view",
-        )
+        vkey = _wk("active_view")
+        if vkey not in st.session_state:
+            st.session_state[vkey] = ("Plan View" if st.session_state["ui_active_view"] == "plan"
+                                      else "Section View")
+
+        def _cb_view():
+            st.session_state["ui_active_view"] = (
+                "plan" if st.session_state[vkey] == "Plan View" else "section")
+
+        st.radio("View", options=["Plan View", "Section View"], key=vkey,
+                 on_change=_cb_view)
+        active_view = st.session_state["ui_active_view"]
 
         st.divider()
 
-        # Machine type (shared by both views)
-        machine_type = st.radio(
-            "Machine Type",
-            options=["mrl", "mra"],
-            index=0,
-            format_func=lambda x: "MRL (Machine Room Less)" if x == "mrl" else "MRA (Machine Room Above)",
-            key="machine_type",
-        )
+        # Machine type (shared by both views). Switching REBUILDS every lift at
+        # the new machine's defaults, preserving lift IDs (mirror of the web).
+        mkey = _wk("machine_type")
+        if mkey not in st.session_state:
+            st.session_state[mkey] = cfg["machine_type"]
 
-        if active_view == "Plan View":
+        def _cb_machine():
+            mt = st.session_state[mkey]
+            c = st.session_state["config"]
+            if mt == c["machine_type"]:
+                return
+
+            def rb(lf):
+                r = ss.make_default_lift(lf["type"], mt)
+                r["lift_id"] = lf.get("lift_id", "")
+                return r
+
+            cores = [{**core,
+                      "bank1_lifts": [rb(lf) for lf in core["bank1_lifts"]],
+                      "bank2_lifts": [rb(lf) for lf in core["bank2_lifts"]]}
+                     for core in c["cores"]]
+            set_config({**c, "machine_type": mt, "cores": cores})
+
+        st.radio(
+            "Machine Type", options=["mrl", "mra"],
+            format_func=lambda x: "MRL (Machine Room Less)" if x == "mrl" else "MRA (Machine Room Above)",
+            key=mkey, on_change=_cb_machine,
+        )
+        machine_type = st.session_state["config"]["machine_type"]
+
+        ci = _active_core_index()
+        core = cfg["cores"][ci]
+        multi_core = len(cfg["cores"]) > 1
+
+        if active_view == "plan":
             st.divider()
 
-            # Plan view settings
-            arrangement = st.radio(
-                "Arrangement",
-                options=["Inline", "Facing"],
-                index=0,
-                key="arrangement",
+            # Cores — one plan per core
+            st.subheader("Cores")
+            ckey = _wk("active_core")
+            if ckey not in st.session_state:
+                st.session_state[ckey] = ci
+
+            def _cb_core():
+                st.session_state["ui_active_core"] = st.session_state[ckey]
+                bump_rev()
+
+            st.radio(
+                "Active Core", options=list(range(len(cfg["cores"]))),
+                format_func=lambda i: cfg["cores"][i]["name"] or f"Core {i + 1}",
+                key=ckey, on_change=_cb_core, horizontal=True,
             )
 
-            num_lifts_bank1 = st.number_input(
-                "Number of Lifts (Bank 1)",
-                min_value=1,
-                max_value=4,
-                value=1,
-                key="num_lifts_bank1",
-            )
+            def _cb_add_core():
+                c = st.session_state["config"]
+                if len(c["cores"]) >= ss.MAX_CORES:
+                    return
+                cores = [*c["cores"],
+                         ss.make_default_core(c["machine_type"], f"Core {len(c['cores']) + 1}")]
+                set_config(ss.fill_blank_lift_ids({**c, "cores": cores}))
+                st.session_state["ui_active_core"] = len(cores) - 1
 
-            num_lifts_bank2 = 0
-            if arrangement == "Facing":
-                num_lifts_bank2 = st.number_input(
-                    "Number of Lifts (Bank 2)",
-                    min_value=1,
-                    max_value=4,
-                    value=2,
-                    key="num_lifts_bank2",
-                )
+            def _cb_remove_core():
+                c = st.session_state["config"]
+                if len(c["cores"]) <= 1:
+                    return
+                rm = _active_core_index()
+                remaining = [x for j, x in enumerate(c["cores"]) if j != rm]
+                cores = [{**x, "name": f"Core {j + 1}"} for j, x in enumerate(remaining)]
+                set_config(ss.fill_blank_lift_ids({**c, "cores": cores}))
+                st.session_state["ui_active_core"] = max(0, min(rm, len(cores) - 1))
+
+            ac1, ac2 = st.columns(2)
+            with ac1:
+                st.button("+ Add Core", key=_wk("add_core"), width="stretch",
+                          disabled=len(cfg["cores"]) >= ss.MAX_CORES,
+                          on_click=_cb_add_core)
+            with ac2:
+                st.button("− Remove Core", key=_wk("remove_core"), width="stretch",
+                          disabled=len(cfg["cores"]) <= 1,
+                          on_click=_cb_remove_core)
+
+            st.divider()
+
+            # Arrangement (per core). Switching to Facing seeds two bank-2 lifts
+            # when the bank is empty (mirror of the web toolbar).
+            akey = _wk("arrangement")
+            if akey not in st.session_state:
+                st.session_state[akey] = core["arrangement"]
+
+            def _cb_arrangement():
+                val = st.session_state[akey]
+                c = st.session_state["config"]
+                aci = _active_core_index()
+                acore = c["cores"][aci]
+                if acore["arrangement"] == val:
+                    return
+                nxt = {**acore, "arrangement": val}
+                if val == "Facing" and not acore["bank2_lifts"]:
+                    b2 = [ss.make_default_lift("passenger", c["machine_type"]),
+                          ss.make_default_lift("passenger", c["machine_type"])]
+                    nxt["bank2_lifts"] = b2
+                    nxt["separator_types_bank2"] = ss.compute_default_separator_types(
+                        b2, acore["common_shaft"])
+                cores = list(c["cores"])
+                cores[aci] = nxt
+                set_config(ss.fill_blank_lift_ids({**c, "cores": cores}))
+
+            st.radio("Arrangement", options=["Inline", "Facing"], key=akey,
+                     on_change=_cb_arrangement)
+
+            # Number of lifts per bank
+            n1key = _wk("num_bank1")
+            if n1key not in st.session_state:
+                st.session_state[n1key] = len(core["bank1_lifts"])
+
+            def _cb_n1():
+                _set_bank_count(_active_core_index(), "bank1", int(st.session_state[n1key]))
+
+            st.number_input("Number of Lifts (Bank 1)", min_value=1,
+                            max_value=ss.MAX_LIFTS_PER_BANK, key=n1key, on_change=_cb_n1)
+
+            if core["arrangement"] == "Facing":
+                n2key = _wk("num_bank2")
+                if n2key not in st.session_state:
+                    st.session_state[n2key] = max(1, len(core["bank2_lifts"]))
+
+                def _cb_n2():
+                    _set_bank_count(_active_core_index(), "bank2", int(st.session_state[n2key]))
+
+                st.number_input("Number of Lifts (Bank 2)", min_value=1,
+                                max_value=ss.MAX_LIFTS_PER_BANK, key=n2key, on_change=_cb_n2)
 
             st.divider()
             st.subheader("Display Options")
-            show_dimensions = st.checkbox("Show Dimensions", value=True, key="show_dimensions")
-            show_hatching = st.checkbox("Show Hatching", value=True, key="show_hatching")
-            show_centerlines = st.checkbox("Show Centerlines", value=False, key="show_centerlines")
-            show_capacity = st.checkbox("Show Capacity Label", value=False, key="show_capacity")
-            show_accessibility = st.checkbox("Show Accessibility Symbol", value=False, key="show_accessibility")
-            show_brackets = st.checkbox("Show Brackets", value=True, key="show_brackets")
-            show_lift_doors = st.checkbox("Show Lift Doors", value=True, key="show_lift_doors")
-            dim_font_pct = _dim_font_slider(
-                _dim_font_max_pct(arrangement, num_lifts_bank1, num_lifts_bank2),
-                "dim_font_pct",
-            )
+            _bool_option("show_dimensions", "Show Dimensions")
+            _bool_option("show_hatching", "Show Hatching")
+            _bool_option("show_centerlines", "Show Centerlines")
+            _bool_option("show_capacity", "Show Capacity Label")
+            _bool_option("show_lift_id", "Show Lift ID Label")
+            _bool_option("show_accessibility", "Show Accessibility Symbol")
+            _bool_option("show_brackets", "Show Brackets")
+            _bool_option("show_lift_doors", "Show Lift Doors")
+            _bool_option("show_brief_spec", "Show Brief Spec Table")
+            _bool_option("split_lift_types", "Split Passenger / Fire Plans")
+
+            # Renumber all lift IDs (PL-01.., FL/SL-01..) continuously across cores
+            def _cb_renumber():
+                set_config(ss.renumber_lift_ids(st.session_state["config"]))
+
+            st.button("Renumber Lift IDs", key=_wk("renumber"), width="stretch",
+                      on_click=_cb_renumber)
+
+            plan_font_max_pct = int(round(ss.plan_dimension_font_max(
+                core["arrangement"], len(core["bank1_lifts"]),
+                len(core["bank2_lifts"])) * 100))
+            _dim_font_slider(plan_font_max_pct, "dimension_font_scale")
 
         else:
             st.divider()
             st.subheader("Display Options")
-            section_show_dimensions = st.checkbox("Show Dimensions", value=True, key="section_show_dimensions")
-            section_show_hatching = st.checkbox("Show Hatching", value=True, key="section_show_hatching")
-            section_show_break_lines = st.checkbox("Show Break Lines", value=True, key="section_show_break_lines")
-            section_show_machine = st.checkbox("Show Machine Image", value=True, key="section_show_machine")
-            section_dim_font_pct = _dim_font_slider(_DIM_FONT_MAX_SECTION, "section_dim_font_pct")
+            _bool_option("section_show_dimensions", "Show Dimensions")
+            _bool_option("section_show_hatching", "Show Hatching")
+            _bool_option("section_show_break_lines", "Show Break Lines")
+            _bool_option("section_show_machine", "Show Machine Image")
+            _bool_option("show_brief_spec", "Show Brief Spec Table")
+            _dim_font_slider(int(ss.SECTION_DIM_FONT_MAX * 100),
+                             "section_dimension_font_scale")
 
         st.divider()
-        st.button(
-            "Clear All",
-            type="secondary",
-            width="stretch",
-            key="clear_all_btn",
-            on_click=_clear_all,
-            help="Empty every input cell and reset the options above to defaults.",
-        )
-        st.button(
-            "Restore Defaults",
-            type="secondary",
-            width="stretch",
-            key="restore_defaults_btn",
-            on_click=_restore_defaults,
-            help="Reset every input back to its default value.",
-        )
 
-    # Machine-type change resets every lift to the new machine's defaults
-    # (matches the web, which resets all lifts globally on machine change —
-    # not lazily — so the Section view sees fresh data even when the plan
-    # forms aren't currently rendered).
-    if st.session_state.get("_app_prev_mt") != machine_type:
-        for k in list(st.session_state.keys()):
-            if k.startswith("bank1_lift_") or k.startswith("bank2_lift_"):
-                del st.session_state[k]
-        st.session_state["_app_prev_mt"] = machine_type
+        # Undo / Redo — whole-sketch history (manual + Debbie edits)
+        uc1, uc2 = st.columns(2)
+        with uc1:
+            st.button("↩ Undo", key=_wk("undo"), width="stretch",
+                      disabled=not can_undo(), on_click=_undo_clicked)
+        with uc2:
+            st.button("↪ Redo", key=_wk("redo"), width="stretch",
+                      disabled=not can_redo(), on_click=_redo_clicked)
+
+        st.button("Clear All", type="secondary", width="stretch",
+                  key=_wk("clear_all"), on_click=_clear_all,
+                  help="Empty every input cell (structure, IDs and options survive).")
+        st.button("Restore Defaults", type="secondary", width="stretch",
+                  key=_wk("restore_defaults"), on_click=_restore_defaults,
+                  help="Reset every input back to its default value.")
+
+    # Re-read state (callbacks above may have changed it)
+    cfg = st.session_state["config"]
+    ci = _active_core_index()
+    core = cfg["cores"][ci]
+    multi_core = len(cfg["cores"]) > 1
+    machine_type = cfg["machine_type"]
+    active_view = st.session_state["ui_active_view"]
 
     # ── Plan View ──
-    if active_view == "Plan View":
+    if active_view == "plan":
         col_config, col_preview = st.columns([1, 1])
 
         with col_config:
             st.header("Lift Configuration")
 
-            # Bank 1 lift configurations
-            st.subheader("Bank 1")
-            bank1_lifts = []
-            for i in range(num_lifts_bank1):
-                lift_data = render_lift_config_form(i, "bank1", machine_type, show_capacity_input=show_capacity)
-                bank1_lifts.append(lift_data)
+            st.subheader(f"{core['name']} — Bank 1" if multi_core else "Bank 1")
+            for i in range(len(core["bank1_lifts"])):
+                render_lift_form(ci, "bank1", i, machine_type, cfg["show_capacity"])
 
-            # Bank 2 configurations (if facing)
-            bank2_lifts = []
-            if arrangement == "Facing":
-                st.subheader("Bank 2")
-                for i in range(num_lifts_bank2):
-                    lift_data = render_lift_config_form(i, "bank2", machine_type, show_capacity_input=show_capacity)
-                    bank2_lifts.append(lift_data)
+            if core["arrangement"] == "Facing" and core["bank2_lifts"]:
+                st.subheader(f"{core['name']} — Bank 2" if multi_core else "Bank 2")
+                for i in range(len(core["bank2_lifts"])):
+                    render_lift_form(ci, "bank2", i, machine_type, cfg["show_capacity"])
 
             st.divider()
-
-            # Shaft configuration
             st.subheader("Shaft Configuration")
 
             col_shaft1, col_shaft2 = st.columns(2)
             with col_shaft1:
-                wall_thickness = st.number_input(
-                    "Wall Thickness (mm)",
-                    min_value=100,
-                    max_value=500,
-                    value=200,
-                    step=25,
-                    key="wall_thickness",
-                )
+                wkey = f"c{ci}_wall_thickness"
 
+                def _cb_wall():
+                    raw = st.session_state.get(_wk(wkey))
+                    _core_write(_active_core_index(),
+                                {"wall_thickness_mm": float("nan") if raw is None else raw})
+
+                _num(wkey, "Wall Thickness (mm)", seed=core["wall_thickness_mm"],
+                     min_value=100, max_value=500, step=25, on_change=_cb_wall)
             with col_shaft2:
-                common_shaft = st.checkbox(
-                    "Common Shaft",
-                    value=False,
-                    key="common_shaft",
-                    help="If checked, lifts share a common shaft (steel-beam separator between passenger lifts).",
-                )
+                cskey = _wk(f"c{ci}_common_shaft")
+                if cskey not in st.session_state:
+                    st.session_state[cskey] = bool(core["common_shaft"])
 
-            if arrangement == "Facing":
-                lobby_width = st.number_input(
-                    "Lobby Depth (mm)",
-                    min_value=2000,
-                    max_value=10000,
-                    value=4000,
-                    step=100,
-                    key="lobby_width",
-                )
-            else:
-                lobby_width = 4000
+                def _cb_common():
+                    _core_write(_active_core_index(),
+                                {"common_shaft": st.session_state[cskey]})
+
+                st.checkbox("Common Shaft", key=cskey, on_change=_cb_common,
+                            help="If checked, lifts share a common shaft "
+                                 "(steel-beam separator between passenger lifts).")
+
+            if core["arrangement"] == "Facing":
+                lkey = f"c{ci}_lobby"
+
+                def _cb_lobby():
+                    raw = st.session_state.get(_wk(lkey))
+                    _core_write(_active_core_index(),
+                                {"lobby_width_mm": float("nan") if raw is None else raw})
+
+                _num(lkey, "Lobby Depth (mm)", seed=core["lobby_width_mm"],
+                     min_value=2000, max_value=10000, step=100, on_change=_cb_lobby)
 
             # Per-gap separator types (only when common shaft + >= 2 lifts)
-            sep_types_bank1 = compute_default_separator_types(bank1_lifts, common_shaft)
-            sep_types_bank2 = compute_default_separator_types(bank2_lifts, common_shaft)
-
-            sep_opts = ["rcc_wall", "steel_beam"]
-            sep_fmt = lambda x: "Steel Beam" if x == "steel_beam" else "RCC Wall"
-
-            if common_shaft and len(bank1_lifts) >= 2:
-                st.caption("Bank 1 Separator Types")
-                for i in range(len(bank1_lifts) - 1):
-                    skey = f"sep_b1_{i}"
+            def sep_fmt(x):
+                return "Steel Beam" if x == "steel_beam" else "RCC Wall"
+            for bank, label in (("bank1", "Bank 1"), ("bank2", "Bank 2")):
+                lifts = core["bank1_lifts"] if bank == "bank1" else core["bank2_lifts"]
+                if not (core["common_shaft"] and len(lifts) >= 2):
+                    continue
+                if bank == "bank2" and core["arrangement"] != "Facing":
+                    continue
+                sep_key = f"separator_types_{bank}"
+                seps = list(core[sep_key])
+                while len(seps) < len(lifts) - 1:
+                    seps.append("rcc_wall")
+                st.caption(f"{label} Separator Types")
+                for gi in range(len(lifts) - 1):
+                    skey = _wk(f"c{ci}_{bank}_sep_{gi}")
                     if skey not in st.session_state:
-                        st.session_state[skey] = sep_types_bank1[i]
-                    sep_types_bank1[i] = st.selectbox(
-                        f"Lift {i + 1}–{i + 2}", options=sep_opts, format_func=sep_fmt, key=skey,
-                    )
+                        st.session_state[skey] = seps[gi]
 
-            if common_shaft and arrangement == "Facing" and len(bank2_lifts) >= 2:
-                st.caption("Bank 2 Separator Types")
-                for i in range(len(bank2_lifts) - 1):
-                    skey = f"sep_b2_{i}"
-                    if skey not in st.session_state:
-                        st.session_state[skey] = sep_types_bank2[i]
-                    sep_types_bank2[i] = st.selectbox(
-                        f"Lift {i + 1}–{i + 2}", options=sep_opts, format_func=sep_fmt, key=skey,
-                    )
+                    def _cb_sep(bank=bank, gi=gi, skey=skey, sep_key=sep_key):
+                        c = st.session_state["config"]
+                        aci = _active_core_index()
+                        acore = c["cores"][aci]
+                        alifts = acore["bank1_lifts"] if bank == "bank1" else acore["bank2_lifts"]
+                        cur = list(acore[sep_key])
+                        while len(cur) < len(alifts) - 1:
+                            cur.append("rcc_wall")
+                        cur[gi] = st.session_state[skey]
+                        _core_write(aci, {sep_key: cur[:max(0, len(alifts) - 1)]})
 
-        # Preview column
+                    st.selectbox(f"Lift {gi + 1}–{gi + 2}",
+                                 options=["rcc_wall", "steel_beam"],
+                                 format_func=sep_fmt, key=skey, on_change=_cb_sep)
+
         with col_preview:
             st.header("Preview")
 
-            generate_btn = st.button("Generate Sketch", type="primary", width="stretch", key="plan_generate")
+            if st.button("Generate Sketch", type="primary", width="stretch",
+                         key=_wk("plan_generate")):
+                generate_plan()
 
-            blanks_plan = (any(_lift_has_blanks(ld) for ld in bank1_lifts)
-                           or any(_lift_has_blanks(ld) for ld in bank2_lifts))
-            if generate_btn and blanks_plan:
-                st.session_state["generation_error"] = (
-                    "Some input cells are empty. Fill in all fields before generating.")
-                st.session_state["generated_image"] = None
-            elif generate_btn:
-                try:
-                    # Build LiftConfig objects for Bank 1
-                    lift_configs = [build_lift_config(ld, machine_type, wall_thickness) for ld in bank1_lifts]
+            # Split-plan carousel: cycle All / Passenger / Fire (regenerates).
+            core_lifts = [*core["bank1_lifts"], *core["bank2_lifts"]]
+            has_both = (any(lf["type"] == "passenger" for lf in core_lifts)
+                        and any(lf["type"] == "fire" for lf in core_lifts))
+            show_variant_nav = cfg["split_lift_types"] and has_both
+            if not show_variant_nav and st.session_state["ui_plan_variant"] != "all":
+                st.session_state["ui_plan_variant"] = "all"
 
-                    # Build LiftConfig objects for Bank 2 (if facing)
-                    lift_configs_bank2 = None
-                    if arrangement == "Facing" and bank2_lifts:
-                        lift_configs_bank2 = [build_lift_config(ld, machine_type, wall_thickness) for ld in bank2_lifts]
+            if show_variant_nav:
+                nav1, nav2, nav3 = st.columns([0.15, 0.7, 0.15])
+                cur_i = PLAN_VARIANTS.index(st.session_state["ui_plan_variant"])
+                with nav1:
+                    if st.button("◀", key=_wk("variant_prev"), width="stretch"):
+                        nxt = PLAN_VARIANTS[(cur_i - 1) % len(PLAN_VARIANTS)]
+                        st.session_state["ui_plan_variant"] = nxt
+                        generate_plan(nxt)
+                        st.rerun()
+                with nav2:
+                    st.markdown(
+                        f"<p style='text-align:center;margin:0.4rem 0'>"
+                        f"{PLAN_VARIANT_LABELS[st.session_state['ui_plan_variant']]}</p>",
+                        unsafe_allow_html=True)
+                with nav3:
+                    if st.button("▶", key=_wk("variant_next"), width="stretch"):
+                        nxt = PLAN_VARIANTS[(cur_i + 1) % len(PLAN_VARIANTS)]
+                        st.session_state["ui_plan_variant"] = nxt
+                        generate_plan(nxt)
+                        st.rerun()
 
-                    # Create sketch
-                    sketch = LiftShaftSketch(
-                        lifts=lift_configs,
-                        lifts_bank2=lift_configs_bank2,
-                        lobby_width=lobby_width if arrangement == "Facing" else None,
-                        is_common_shaft=common_shaft,
-                        wall_thickness=wall_thickness,
-                        separator_types_bank1=sep_types_bank1 or None,
-                        separator_types_bank2=sep_types_bank2 or None,
-                    )
+            if st.session_state.get("plan_error"):
+                st.error(st.session_state["plan_error"])
 
-                    # Generate PNG bytes
-                    img_bytes = sketch.to_bytes(
-                        show_hatching=show_hatching,
-                        show_dimensions=show_dimensions,
-                        show_centerlines=show_centerlines,
-                        show_car_interior=True,
-                        show_brackets=show_brackets,
-                        show_door_panels=True,
-                        show_capacity=show_capacity,
-                        show_accessibility=show_accessibility,
-                        show_lift_doors=show_lift_doors,
-                        font_scale=dim_font_pct / 100,
-                    )
-
-                    st.session_state["generated_image"] = img_bytes
-                    st.session_state["generation_error"] = None
-
-                except ValueError as e:
-                    st.session_state["generation_error"] = str(e)
-                    st.session_state["generated_image"] = None
-                except Exception as e:
-                    st.session_state["generation_error"] = f"Unexpected error: {str(e)}"
-                    st.session_state["generated_image"] = None
-
-            # Display image or error
-            if st.session_state.get("generation_error"):
-                st.error(st.session_state["generation_error"])
-
-            if st.session_state.get("generated_image"):
-                st.image(st.session_state["generated_image"], width="stretch")
-
+            if st.session_state.get("plan_image"):
+                st.image(st.session_state["plan_image"], width="stretch")
                 st.download_button(
                     label="Download PNG",
-                    data=st.session_state["generated_image"],
+                    data=st.session_state["plan_image"],
                     file_name="lift_plan.png",
                     mime="image/png",
                     width="stretch",
                 )
 
+            render_debbie_panel()
+
     # ── Section View ──
     else:
-        # Gather the plan-view lifts; the section is drawn from a real one
-        # (matches KARR AI /preview/section).
-        plan_lifts = gather_plan_lifts(machine_type)
-        plan_wall = int(st.session_state.get("wall_thickness", 200))
-
         col_section_config, col_section_preview = st.columns([1, 1])
 
         with col_section_config:
             st.header("Section Configuration")
 
-            # Copy shaft dimensions from a plan-view lift.
-            st.caption("Copy shaft dimensions from a plan-view lift")
-            copy_keys = [(b, i) for (b, i, _d) in plan_lifts]
+            # Section lift selector — switching auto-applies that lift's
+            # shaft/pit/overhead dimensions into the section view.
+            st.caption("Section dimensions follow the selected plan-view lift")
+            options = []
+            labels = {}
+            for cci, c in enumerate(cfg["cores"]):
+                prefix = f"{c['name'] or f'Core {cci + 1}'} · " if multi_core else ""
+                for b, bank_lifts in (("1", c["bank1_lifts"]), ("2", c["bank2_lifts"])):
+                    for i, lf in enumerate(bank_lifts):
+                        key = f"c{cci}-b{b}-{i}"
+                        options.append(key)
+                        labels[key] = prefix + ((lf.get("lift_id") or "").strip()
+                                                or f"Bank {b} Lift {i + 1}")
 
-            def _copy_label(bi):
-                b, i = bi
-                return f"{'Bank 1' if b == 'bank1' else 'Bank 2'} Lift {i + 1}"
+            if st.session_state["ui_section_source"] not in options:
+                st.session_state["ui_section_source"] = options[0]
 
-            cp_sel, cp_btn = st.columns([0.72, 0.28])
-            with cp_sel:
-                copy_src = st.selectbox(
-                    "Copy source", options=copy_keys, format_func=_copy_label,
-                    key="section_copy_src", label_visibility="collapsed",
-                )
-            with cp_btn:
-                if st.button("Copy", key="section_copy_btn", width="stretch"):
-                    src_dict = next((d for (b, i, d) in plan_lifts if (b, i) == copy_src), None)
-                    if src_dict is not None:
-                        copy_lift_to_section(src_dict, plan_wall)
-                    st.rerun()
+            srckey = _wk("section_source")
+            if srckey not in st.session_state:
+                st.session_state[srckey] = st.session_state["ui_section_source"]
 
-            section_form = render_section_config_form(machine_type)
+            def _cb_section_source():
+                key = st.session_state[srckey]
+                st.session_state["ui_section_source"] = key
+                m = SECTION_KEY_RE.match(key)
+                if not m:
+                    return
+                c = st.session_state["config"]
+                cci, b, i = int(m.group(1)), m.group(2), int(m.group(3))
+                if cci >= len(c["cores"]):
+                    return
+                acore = c["cores"][cci]
+                lifts = acore["bank1_lifts"] if b == "1" else acore["bank2_lifts"]
+                if i >= len(lifts):
+                    return
+                set_config({**c, "section": ss.copy_lift_values_to_section(
+                    c["section"], lifts[i], acore["wall_thickness_mm"])})
+                st.session_state["section_image"] = None
+
+            st.selectbox("Section Lift", options=options,
+                         format_func=lambda k: labels.get(k, k),
+                         key=srckey, on_change=_cb_section_source,
+                         label_visibility="collapsed")
+
+            render_section_form(machine_type)
 
         with col_section_preview:
             st.header("Preview")
 
-            section_generate_btn = st.button(
-                "Generate Section", type="primary", width="stretch", key="section_generate"
-            )
+            if st.button("Generate Section", type="primary", width="stretch",
+                         key=_wk("section_generate")):
+                generate_section()
 
-            sec_req = ["shaft_width", "wall_thickness", "pit_slab", "pit_depth",
-                       "travel_height", "overhead_clearance", "door_height",
-                       "structural_opening_height"]
-            blanks_section = any(section_form.get(f) is None for f in sec_req) or (
-                machine_type == "mra" and section_form.get("machine_room_height") is None)
-            if section_generate_btn and blanks_section:
-                st.session_state["section_generation_error"] = (
-                    "Some input cells are empty. Fill in all fields before generating.")
-                st.session_state["section_generated_image"] = None
-            elif section_generate_btn:
-                try:
-                    wall = section_form["wall_thickness"]
+            if st.session_state.get("section_error"):
+                st.error(st.session_state["section_error"])
 
-                    # Target lift: fire if any fire lift is configured, else passenger.
-                    target = "fire" if any(d["type"] == "fire" for (_b, _i, d) in plan_lifts) else "passenger"
-                    configs = [build_lift_config(d, machine_type, wall)
-                               for (_b, _i, d) in plan_lifts if not _lift_has_blanks(d)]
-                    section_lift_config = next((c for c in configs if c.lift_type == target), None)
-
-                    # Fallback: synthetic config when no matching lift exists.
-                    if section_lift_config is None:
-                        section_lift_config = LiftConfig(
-                            lift_machine_type=machine_type,
-                            wall_thickness=wall,
-                            door_height=section_form["door_height"],
-                            structural_opening_height=section_form["structural_opening_height"],
-                            shaft_depth_override=section_form["shaft_width"],
-                        )
-
-                    # Section form's Shaft Depth always overrides the lift's depth.
-                    section_lift_config.shaft_depth_override = section_form["shaft_width"]
-
-                    # Build SectionConfig
-                    section_kwargs = {
-                        "pit_slab": section_form["pit_slab"],
-                        "pit_depth": section_form["pit_depth"],
-                        "overhead_clearance": section_form["overhead_clearance"],
-                        "travel_height": section_form["travel_height"],
-                        "door_height": section_form["door_height"],
-                        "structural_opening_height": section_form["structural_opening_height"],
-                    }
-                    if machine_type == "mra" and section_form["machine_room_height"] is not None:
-                        section_kwargs["machine_room_height"] = section_form["machine_room_height"]
-
-                    section_cfg = SectionConfig(**section_kwargs)
-
-                    # Create section sketch
-                    section_sketch = LiftSectionSketch(
-                        lift_config=section_lift_config,
-                        section_config=section_cfg,
-                    )
-
-                    # Generate PNG bytes
-                    section_img_bytes = section_sketch.to_bytes(
-                        show_hatching=section_show_hatching,
-                        show_dimensions=section_show_dimensions,
-                        show_break_lines=section_show_break_lines,
-                        show_mrl_machine=section_show_machine,
-                        font_scale=section_dim_font_pct / 100,
-                    )
-
-                    st.session_state["section_generated_image"] = section_img_bytes
-                    st.session_state["section_generation_error"] = None
-
-                except ValueError as e:
-                    st.session_state["section_generation_error"] = str(e)
-                    st.session_state["section_generated_image"] = None
-                except Exception as e:
-                    st.session_state["section_generation_error"] = f"Unexpected error: {str(e)}"
-                    st.session_state["section_generated_image"] = None
-
-            # Display section image or error
-            if st.session_state.get("section_generation_error"):
-                st.error(st.session_state["section_generation_error"])
-
-            if st.session_state.get("section_generated_image"):
-                st.image(st.session_state["section_generated_image"], width="stretch")
-
+            if st.session_state.get("section_image"):
+                st.image(st.session_state["section_image"], width="stretch")
                 st.download_button(
                     label="Download PNG",
-                    data=st.session_state["section_generated_image"],
+                    data=st.session_state["section_image"],
                     file_name="lift_section.png",
                     mime="image/png",
                     width="stretch",
                 )
+
+            render_debbie_panel()
 
 
 if __name__ == "__main__":

@@ -35,6 +35,8 @@ try:
         draw_car_brackets_mra,
         add_image_border,
         scaled_dimension_font,
+        composite_brief_spec_table,
+        brief_spec_row,
     )
 except ImportError:
     import config
@@ -58,6 +60,8 @@ except ImportError:
         draw_car_brackets_mra,
         add_image_border,
         scaled_dimension_font,
+        composite_brief_spec_table,
+        brief_spec_row,
     )
 
 
@@ -76,6 +80,13 @@ class LiftConfig:
     lift_type: str = "passenger"  # "passenger" or "fire"
     lift_capacity: Optional[int] = None  # e.g., 1350 KG
     lift_machine_type: str = "mrl"  # "mrl" (Machine Room Less) or "mra" (Machine Room Above)
+    lift_id: str = ""  # Designation shown in the brief-spec table (e.g. "PL-01")
+    # Resolved report speed (e.g. "2.5 m/s") for the brief-spec table; report-only,
+    # stamped per type in generate_sketches. Blank → rendered as "TBC".
+    lift_speed: str = ""
+    # Group-control label from the Space Planning table (e.g. "3 Car Group Control"
+    # / "Simplex"); report-only, stamped per core in generate_sketches. Blank → "TBC".
+    lift_group_control: str = ""
 
     # Car dimensions (for detailed drawings)
     finished_car_width: float = field(default_factory=lambda: config.DEFAULT_FINISHED_CAR_WIDTH)
@@ -274,21 +285,14 @@ class LiftConfig:
         """Validate and configure lift settings. Collects all errors and reports them together."""
         errors = []
 
-        # Fire lift cabin size validation
-        if self.lift_type == "fire":
-            size = (int(self.finished_car_width), int(self.finished_car_depth))
-            if size not in FIRE_LIFT_CABIN_SIZES:
-                valid = ", ".join(f"{w}x{d}" for w, d in FIRE_LIFT_CABIN_SIZES)
-                errors.append(
-                    f"Fire lift must use one of these cabin sizes (WxD): {valid}. "
-                    f"Got: {size[0]}x{size[1]}"
-                )
-            # Validate fire lift door width minimum
-            if self.door_width < config.FIRE_LIFT_DOOR_WIDTH:
-                errors.append(
-                    f"Fire lift door width ({int(self.door_width)}mm) below minimum "
-                    f"({int(config.FIRE_LIFT_DOOR_WIDTH)}mm)."
-                )
+        # NOTE: Fire lift cabin size (preset list) and door-width minimum are
+        # intentionally NOT hard errors. Both are advisory manufacturing
+        # guidance and neither feeds the drawing geometry, so any value is still
+        # drawable. The standard space-planning chart legitimately produces
+        # smaller fire lifts (e.g. 1100mm doors, non-preset cabins), and the
+        # sketch must render those to match the report's space-planning table.
+        # The standalone UI still guides manual users via the door-width minimum
+        # input and the cabin-size dropdown.
 
         # Validate double_entrance (fire lifts only)
         if self.double_entrance and self.lift_type != "fire":
@@ -647,6 +651,9 @@ class LiftShaftSketch:
         show_capacity: bool = True,
         show_accessibility: bool = True,
         show_lift_doors: bool = True,
+        show_lift_id: bool = False,
+        show_brief_spec: bool = False,
+        brief_spec_title: Optional[str] = None,
         title: str = None,
         subtitle: Optional[str] = None,
         dpi: int = None,
@@ -682,6 +689,9 @@ class LiftShaftSketch:
             "show_capacity": show_capacity,
             "show_accessibility": show_accessibility,
             "show_lift_doors": show_lift_doors,
+            "show_lift_id": show_lift_id,
+            "show_brief_spec": show_brief_spec,
+            "brief_spec_title": brief_spec_title,
         }
 
         fig, ax = self._create_figure()
@@ -700,7 +710,12 @@ class LiftShaftSketch:
         )
         plt.close(fig)
 
-        return add_image_border(buf.getvalue())
+        png = buf.getvalue()
+        if show_brief_spec:
+            png = composite_brief_spec_table(
+                png, self._brief_spec_rows(), brief_spec_title,
+            )
+        return add_image_border(png)
 
     def _create_figure(self) -> tuple:
         """Create matplotlib figure and axes."""
@@ -742,6 +757,18 @@ class LiftShaftSketch:
         left_margin = 1500  # Extra space for left depth dimensions (3 levels)
         ax.set_xlim(-left_margin, self.total_width + right_margin)
         ax.set_ylim(-bottom_margin, self.total_depth + top_margin)
+        # NOTE: the brief-spec table is composited as a PIL strip above the saved
+        # image (see to_bytes); it is no longer drawn inside the axes.
+
+    def _brief_spec_rows(self) -> List[List[str]]:
+        """Build the brief-spec table body: one row per lift across both banks.
+        Columns per `brief_spec_row`. Empty for the simple API."""
+        if not (self._use_enhanced_api and self.lifts):
+            return []
+        all_lifts = list(self.lifts)
+        if self.lifts_bank2:
+            all_lifts += list(self.lifts_bank2)
+        return [brief_spec_row(lf) for lf in all_lifts]
 
     def _bracket_mirror(self, lift: "LiftConfig", lift_idx: int) -> bool:
         """Effective bracket-side mirror for a lift (single source of truth).
@@ -1087,6 +1114,7 @@ class LiftShaftSketch:
                 capacity=lift_config.lift_capacity if display_options["show_capacity"] else None,
                 show_cop=False,
                 show_accessibility=display_options["show_accessibility"],
+                lift_id=lift_config.lift_id if display_options.get("show_lift_id") else None,
             )
 
     def _draw_lift_interior_mra(
@@ -1290,6 +1318,7 @@ class LiftShaftSketch:
                 capacity=lift_config.lift_capacity if display_options["show_capacity"] else None,
                 show_cop=False,
                 show_accessibility=display_options["show_accessibility"],
+                lift_id=lift_config.lift_id if display_options.get("show_lift_id") else None,
             )
 
     def _draw_single_lift_dimensions(self, ax: plt.Axes) -> None:
@@ -2769,6 +2798,7 @@ class LiftShaftSketch:
                 capacity=lift_config.lift_capacity if display_options["show_capacity"] else None,
                 show_cop=False,
                 show_accessibility=display_options["show_accessibility"],
+                lift_id=lift_config.lift_id if display_options.get("show_lift_id") else None,
             )
 
     def _draw_lift_interior_mra_mirrored(
@@ -2958,6 +2988,7 @@ class LiftShaftSketch:
                 capacity=lift_config.lift_capacity if display_options["show_capacity"] else None,
                 show_cop=False,
                 show_accessibility=display_options["show_accessibility"],
+                lift_id=lift_config.lift_id if display_options.get("show_lift_id") else None,
             )
 
     def _draw_facing_banks_dimensions(self, ax: plt.Axes) -> None:

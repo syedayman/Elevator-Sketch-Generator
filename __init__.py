@@ -25,6 +25,7 @@ from .shaft_sketch import (
     FIRE_LIFT_CABIN_SIZES,
 )
 from .section_sketch import LiftSectionSketch, SectionConfig
+from .drawing_utils import brief_spec_row, format_brief_capacity
 from . import config
 
 __all__ = [
@@ -34,6 +35,8 @@ __all__ = [
     "SectionConfig",
     "determine_separator_types",
     "FIRE_LIFT_CABIN_SIZES",
+    "brief_spec_row",
+    "format_brief_capacity",
     "config",
 ]
 __version__ = "0.3.0"
