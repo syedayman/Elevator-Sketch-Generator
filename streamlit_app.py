@@ -9,8 +9,11 @@ debbie_operations.py (operation interpreter) and debbie_agent.py (OpenAI call).
 """
 
 import base64
+import hashlib
+import hmac
 import os
 import re
+import tempfile
 import time
 from pathlib import Path
 
@@ -325,6 +328,47 @@ section[data-testid="stSidebar"] [data-testid="stDivider"] {
 .stApp [data-testid="stNumberInput"] button:hover {
     background: rgba(99, 102, 241, 0.25) !important;
 }
+/* Hide Streamlit's "Press Enter to …" input hints — they overlay the
+   placeholder/value in narrow columns instead of sitting beside it. */
+.stApp [data-testid="InputInstructions"],
+.stApp [class*="InputInstructions"] {
+    display: none !important;
+}
+/* Chat input (Debbie) — match the other dark inputs. Paint ONE surface (the
+   outermost element) and force every inner BaseWeb layer transparent, so no
+   second box shows through. */
+.stApp [data-testid="stChatInput"] {
+    background: rgba(2, 6, 23, 0.5) !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    border-radius: 0.6rem !important;
+}
+.stApp [data-testid="stChatInput"]:focus-within {
+    border-color: rgba(129, 140, 248, 0.5) !important;
+}
+.stApp [data-testid="stChatInput"] div,
+.stApp [data-testid="stChatInput"] [data-baseweb="textarea"],
+.stApp [data-testid="stChatInput"] [data-baseweb="base-input"] {
+    background: transparent !important;
+    border: none !important;
+}
+.stApp [data-testid="stChatInput"] textarea {
+    background: transparent !important;
+    color: #f1f5f9 !important;
+}
+.stApp [data-testid="stChatInput"] textarea::placeholder {
+    color: #64748b !important;
+}
+.stApp [data-testid="stChatInput"] button {
+    background: transparent !important;
+    border: none !important;
+    color: #c7d2fe !important;
+}
+.stApp [data-testid="stChatInput"] button:hover {
+    background: rgba(99, 102, 241, 0.25) !important;
+}
+.stApp [data-testid="stChatInput"] button svg {
+    fill: currentColor !important;
+}
 /* Select dropdown popover */
 .stApp [data-baseweb="popover"] [role="listbox"],
 .stApp [data-baseweb="menu"] {
@@ -479,6 +523,7 @@ def init_state() -> None:
     stt.setdefault("debbie_msgs", [])
     stt.setdefault("debbie_pending", None)
     stt.setdefault("debbie_hits", [])
+    stt.setdefault("_autogen_rev", None)
 
 
 def bump_rev() -> None:
@@ -1221,166 +1266,188 @@ def resolve_section_lift(cfg: dict):
 # PNG generation — port of the KARR AI /api/sketches preview endpoints
 # =============================================================================
 
-def generate_plan(plan_filter: str = None) -> None:
-    """Generate the active core's plan PNG into session state. Port of the
-    web handleGenerate (plan branch) + the /preview/plan endpoint."""
-    cfg = st.session_state["config"]
-    ci = _active_core_index()
-    core = cfg["cores"][ci]
-    multi_core = len(cfg["cores"]) > 1
-    variant = plan_filter or st.session_state["ui_plan_variant"]
-
+def _core_has_both_types(core: dict) -> bool:
     core_lifts = [*core["bank1_lifts"], *core["bank2_lifts"]]
-    has_both = (any(lf["type"] == "passenger" for lf in core_lifts)
-                and any(lf["type"] == "fire" for lf in core_lifts))
+    return (any(lf["type"] == "passenger" for lf in core_lifts)
+            and any(lf["type"] == "fire" for lf in core_lifts))
 
-    # Block generation while any input cell is left blank (NaN sentinel).
-    lifts_to_check = core_lifts if core["arrangement"] == "Facing" else core["bank1_lifts"]
+
+def _plan_blank_reason(core: dict):
+    """Blank-cell (NaN sentinel) check for one core's plan. Returns the error
+    message to show, or None when every needed cell is filled."""
+    lifts_to_check = ([*core["bank1_lifts"], *core["bank2_lifts"]]
+                      if core["arrangement"] == "Facing" else core["bank1_lifts"])
     blank = any(ss.has_blank_number(lf) for lf in lifts_to_check)
     if ss.is_blank(core["wall_thickness_mm"]):
         blank = True
     if core["arrangement"] == "Facing" and ss.is_blank(core["lobby_width_mm"]):
         blank = True
+    return ("Some input cells are empty. Fill in all fields before generating."
+            if blank else None)
+
+
+def _render_plan_png(cfg: dict, ci: int, lift_filter: str = "all") -> bytes:
+    """Render one core's plan PNG (pure — no session state). Port of the
+    /preview/plan endpoint. Raises ValueError on config/filter errors."""
+    core = cfg["cores"][ci]
+    multi_core = len(cfg["cores"]) > 1
+    mt = cfg["machine_type"]
+    wall = core["wall_thickness_mm"]
+    bank1_configs = [build_lift_config(lf, mt, wall) for lf in core["bank1_lifts"]]
+    bank2_configs = ([build_lift_config(lf, mt, wall) for lf in core["bank2_lifts"]]
+                     if core["arrangement"] == "Facing" else [])
+
+    sep1 = core["separator_types_bank1"] or None
+    sep2 = core["separator_types_bank2"] or None
+
+    # Optional single-type filter (split-plan carousel). The
+    # subset re-derives its own separators (None); collapse to inline when it
+    # lives entirely in bank 2.
+    if lift_filter in ("passenger", "fire"):
+        bank1_configs = [c for c in bank1_configs if c.lift_type == lift_filter]
+        bank2_configs = [c for c in bank2_configs if c.lift_type == lift_filter]
+        sep1 = sep2 = None
+        if not bank1_configs:
+            bank1_configs, bank2_configs = bank2_configs, []
+        if not bank1_configs:
+            raise ValueError(f"No {lift_filter} lift to preview")
+
+    if core["arrangement"] == "Facing" and bank2_configs:
+        sketch = LiftShaftSketch(
+            lifts=bank1_configs,
+            lifts_bank2=bank2_configs,
+            lobby_width=core["lobby_width_mm"],
+            is_common_shaft=core["common_shaft"],
+            wall_thickness=wall,
+            separator_types_bank1=sep1,
+            separator_types_bank2=sep2,
+        )
+    else:
+        sketch = LiftShaftSketch(
+            lifts=bank1_configs,
+            is_common_shaft=core["common_shaft"],
+            wall_thickness=wall,
+            separator_types_bank1=sep1,
+        )
+
+    brief_title = "BRIEF SPECIFICATION"
+    if multi_core:
+        brief_title += f" — {core['name']}"
+
+    font_max = ss.plan_dimension_font_max(
+        core["arrangement"], len(core["bank1_lifts"]), len(core["bank2_lifts"]))
+
+    return sketch.to_bytes(
+        show_hatching=cfg["show_hatching"],
+        show_dimensions=cfg["show_dimensions"],
+        show_centerlines=cfg["show_centerlines"],
+        show_brackets=cfg["show_brackets"],
+        show_capacity=cfg["show_capacity"],
+        show_accessibility=cfg["show_accessibility"],
+        show_lift_doors=cfg["show_lift_doors"],
+        show_lift_id=cfg["show_lift_id"],
+        show_brief_spec=cfg["show_brief_spec"],
+        brief_spec_title=brief_title,
+        font_scale=ss.clamp_dimension_font_scale(cfg["dimension_font_scale"], font_max),
+    )
+
+
+def generate_plan(plan_filter: str = None) -> None:
+    """Generate the active core's plan PNG into session state. Port of the
+    web handleGenerate (plan branch)."""
+    cfg = st.session_state["config"]
+    ci = _active_core_index()
+    core = cfg["cores"][ci]
+    variant = plan_filter or st.session_state["ui_plan_variant"]
+
+    blank = _plan_blank_reason(core)
     if blank:
-        st.session_state["plan_error"] = (
-            "Some input cells are empty. Fill in all fields before generating.")
+        st.session_state["plan_error"] = blank
         st.session_state["plan_image"] = None
         return
 
+    # Only filter when the split option + a mixed core make it meaningful.
+    lift_filter = (variant if (cfg["split_lift_types"] and _core_has_both_types(core))
+                   else "all")
     try:
-        mt = cfg["machine_type"]
-        wall = core["wall_thickness_mm"]
-        bank1_configs = [build_lift_config(lf, mt, wall) for lf in core["bank1_lifts"]]
-        bank2_configs = ([build_lift_config(lf, mt, wall) for lf in core["bank2_lifts"]]
-                         if core["arrangement"] == "Facing" else [])
-
-        sep1 = core["separator_types_bank1"] or None
-        sep2 = core["separator_types_bank2"] or None
-
-        # Optional single-type filter for the split-plan carousel. The subset
-        # re-derives its own separators (None); collapse to inline when it
-        # lives entirely in bank 2.
-        lift_filter = variant if (cfg["split_lift_types"] and has_both) else "all"
-        if lift_filter in ("passenger", "fire"):
-            bank1_configs = [c for c in bank1_configs if c.lift_type == lift_filter]
-            bank2_configs = [c for c in bank2_configs if c.lift_type == lift_filter]
-            sep1 = sep2 = None
-            if not bank1_configs:
-                bank1_configs, bank2_configs = bank2_configs, []
-            if not bank1_configs:
-                st.session_state["plan_error"] = f"No {lift_filter} lift to preview"
-                st.session_state["plan_image"] = None
-                return
-
-        if core["arrangement"] == "Facing" and bank2_configs:
-            sketch = LiftShaftSketch(
-                lifts=bank1_configs,
-                lifts_bank2=bank2_configs,
-                lobby_width=core["lobby_width_mm"],
-                is_common_shaft=core["common_shaft"],
-                wall_thickness=wall,
-                separator_types_bank1=sep1,
-                separator_types_bank2=sep2,
-            )
-        else:
-            sketch = LiftShaftSketch(
-                lifts=bank1_configs,
-                is_common_shaft=core["common_shaft"],
-                wall_thickness=wall,
-                separator_types_bank1=sep1,
-            )
-
-        brief_title = "BRIEF SPECIFICATION"
-        if multi_core:
-            brief_title += f" — {core['name']}"
-
-        font_max = ss.plan_dimension_font_max(
-            core["arrangement"], len(core["bank1_lifts"]), len(core["bank2_lifts"]))
-
-        img_bytes = sketch.to_bytes(
-            show_hatching=cfg["show_hatching"],
-            show_dimensions=cfg["show_dimensions"],
-            show_centerlines=cfg["show_centerlines"],
-            show_brackets=cfg["show_brackets"],
-            show_capacity=cfg["show_capacity"],
-            show_accessibility=cfg["show_accessibility"],
-            show_lift_doors=cfg["show_lift_doors"],
-            show_lift_id=cfg["show_lift_id"],
-            show_brief_spec=cfg["show_brief_spec"],
-            brief_spec_title=brief_title,
-            font_scale=ss.clamp_dimension_font_scale(cfg["dimension_font_scale"], font_max),
-        )
-        st.session_state["plan_image"] = img_bytes
+        st.session_state["plan_image"] = _render_plan_png(cfg, ci, lift_filter)
         st.session_state["plan_error"] = None
-
     except ValueError as e:
         st.session_state["plan_error"] = str(e)
         st.session_state["plan_image"] = None
     except Exception as e:  # noqa: BLE001 — surface unexpected errors in the UI
         st.session_state["plan_error"] = f"Unexpected error: {e}"
         st.session_state["plan_image"] = None
+    st.session_state["_autogen_rev"] = st.session_state["rev"]
 
 
-def generate_section() -> None:
-    """Generate the section PNG into session state. Port of the web
-    handleGenerate (section branch) + the /preview/section endpoint."""
-    cfg = st.session_state["config"]
+def _render_section_png(cfg: dict) -> bytes:
+    """Render the section PNG for the selected source lift (pure — no session
+    writes). Port of the /preview/section endpoint. Raises ValueError."""
     section = cfg["section"]
     pick_lift, pick_core = resolve_section_lift(cfg)
     multi_core = len(cfg["cores"]) > 1
 
-    if ss.has_blank_number(pick_lift) or ss.has_blank_number(section):
+    mt = cfg["machine_type"]
+    lift_config = build_lift_config(pick_lift, mt, section["wall_thickness"])
+
+    # The section form's Shaft Depth always overrides the lift's depth.
+    lift_config.shaft_depth_override = section["shaft_depth"]
+
+    section_kwargs = {
+        "pit_slab": section["pit_slab"],
+        "pit_depth": section["pit_depth"],
+        "overhead_clearance": section["overhead_clearance"],
+        "travel_height": section["travel_height"],
+        "door_height": section["door_height"],
+        "structural_opening_height": section["structural_opening_height"],
+    }
+    if mt == "mra" and section.get("machine_room_height") is not None:
+        section_kwargs["machine_room_height"] = section["machine_room_height"]
+
+    section_sketch = LiftSectionSketch(
+        lift_config=lift_config,
+        section_config=SectionConfig(**section_kwargs),
+    )
+
+    brief_title = "BRIEF SPECIFICATION"
+    if multi_core:
+        brief_title += f" — {pick_core['name']}"
+
+    return section_sketch.to_bytes(
+        show_hatching=cfg["section_show_hatching"],
+        show_dimensions=cfg["section_show_dimensions"],
+        show_break_lines=cfg["section_show_break_lines"],
+        show_mrl_machine=cfg["section_show_machine"],
+        show_brief_spec=cfg["show_brief_spec"],
+        brief_spec_title=brief_title,
+        font_scale=ss.clamp_dimension_font_scale(
+            cfg["section_dimension_font_scale"], ss.SECTION_DIM_FONT_MAX),
+    )
+
+
+def generate_section() -> None:
+    """Generate the section PNG into session state. Port of the web
+    handleGenerate (section branch)."""
+    cfg = st.session_state["config"]
+    pick_lift, _ = resolve_section_lift(cfg)
+
+    if ss.has_blank_number(pick_lift) or ss.has_blank_number(cfg["section"]):
         st.session_state["section_error"] = (
             "Some input cells are empty. Fill in all fields before generating.")
         st.session_state["section_image"] = None
         return
 
     try:
-        mt = cfg["machine_type"]
-        lift_config = build_lift_config(pick_lift, mt, section["wall_thickness"])
-
-        # The section form's Shaft Depth always overrides the lift's depth.
-        lift_config.shaft_depth_override = section["shaft_depth"]
-
-        section_kwargs = {
-            "pit_slab": section["pit_slab"],
-            "pit_depth": section["pit_depth"],
-            "overhead_clearance": section["overhead_clearance"],
-            "travel_height": section["travel_height"],
-            "door_height": section["door_height"],
-            "structural_opening_height": section["structural_opening_height"],
-        }
-        if mt == "mra" and section.get("machine_room_height") is not None:
-            section_kwargs["machine_room_height"] = section["machine_room_height"]
-
-        section_sketch = LiftSectionSketch(
-            lift_config=lift_config,
-            section_config=SectionConfig(**section_kwargs),
-        )
-
-        brief_title = "BRIEF SPECIFICATION"
-        if multi_core:
-            brief_title += f" — {pick_core['name']}"
-
-        img_bytes = section_sketch.to_bytes(
-            show_hatching=cfg["section_show_hatching"],
-            show_dimensions=cfg["section_show_dimensions"],
-            show_break_lines=cfg["section_show_break_lines"],
-            show_mrl_machine=cfg["section_show_machine"],
-            show_brief_spec=cfg["show_brief_spec"],
-            brief_spec_title=brief_title,
-            font_scale=ss.clamp_dimension_font_scale(
-                cfg["section_dimension_font_scale"], ss.SECTION_DIM_FONT_MAX),
-        )
-        st.session_state["section_image"] = img_bytes
+        st.session_state["section_image"] = _render_section_png(cfg)
         st.session_state["section_error"] = None
-
     except ValueError as e:
         st.session_state["section_error"] = str(e)
         st.session_state["section_image"] = None
     except Exception as e:  # noqa: BLE001
         st.session_state["section_error"] = f"Unexpected error: {e}"
         st.session_state["section_image"] = None
+    st.session_state["_autogen_rev"] = st.session_state["rev"]
 
 
 def regenerate_active_view() -> None:
@@ -1397,9 +1464,8 @@ def regenerate_active_view() -> None:
 # =============================================================================
 
 DEBBIE_INTRO = (
-    "Hi, I'm Debbie. Tell me how to tweak the sketch — e.g. \"centre the doors "
-    "for PL-02\", \"make Core 1 facing\", or \"set the pit depth to 1500\". "
-    "I'll ask if I need more detail."
+    "Hi, I'm Debbie. How would you like to edit the sketch? — e.g. \"centre the doors "
+    "for PL-02\" or \"set the pit depth to 1500\". "
 )
 
 DEBBIE_RATE_LIMIT_PER_MIN = 30
@@ -1494,20 +1560,59 @@ def render_debbie_panel() -> None:
                             debbie_send(opt)
                         st.rerun()
 
-        with st.form(key=_wk("debbie_form"), clear_on_submit=True):
-            fc1, fc2 = st.columns([0.8, 0.2])
-            with fc1:
-                text = st.text_input("Message", key=_wk("debbie_input"),
-                                     placeholder="Tell Debbie what to change…",
-                                     label_visibility="collapsed")
-            with fc2:
-                submitted = st.form_submit_button("Send", width="stretch")
+        # Native chat bar (self-clearing, submits on Enter) — one clean control
+        # instead of a nested form + text input + Send button.
+        prompt = st.chat_input("Tell Debbie what to change…", key=_wk("debbie_chat"))
         st.caption("Chat clears on reload.")
 
-        if submitted and text.strip():
+        if prompt and prompt.strip():
             with st.spinner("Debbie is thinking…"):
-                debbie_send(text)
+                debbie_send(prompt)
             st.rerun()
+
+GATE_COOKIE_NAME = "debbie_gate"
+GATE_COOKIE_MAX_AGE = 30 * 24 * 3600  # 30 days
+
+
+def _gate_token() -> str | None:
+    """Stable auth token: HMAC of the gate password (never the password
+    itself). Rotating GATE_PASSWORD invalidates every issued cookie."""
+    pw = _gate_password()
+    if not pw:
+        return None
+    return hmac.new(pw.encode(), b"drawing-debbie-gate-v1", hashlib.sha256).hexdigest()
+
+
+def _cookie_authenticated() -> bool:
+    """True when the browser presented a valid gate cookie (set on a previous
+    successful login), so reloads skip the password form."""
+    token = _gate_token()
+    if not token:
+        return False
+    try:
+        presented = st.context.cookies.get(GATE_COOKIE_NAME) or ""
+        return hmac.compare_digest(presented, token)
+    except Exception:
+        return False
+
+
+def _issue_gate_cookie() -> None:
+    """Persist the auth across reloads. document.cookie must run from a real
+    page (st.html does not execute scripts), so serve a tiny script file via
+    st.iframe — it is hosted on the app's own origin, so the cookie lands on
+    the app itself. Best-effort: a failure just means the form shows again."""
+    token = _gate_token()
+    if not token:
+        return
+    html = (f"<script>document.cookie = '{GATE_COOKIE_NAME}={token}; "
+            f"max-age={GATE_COOKIE_MAX_AGE}; path=/; SameSite=Lax';</script>")
+    try:
+        path = Path(tempfile.gettempdir()) / f"debbie_gate_{token[:12]}.html"
+        path.write_text(html, encoding="utf-8")
+        st.iframe(path, height=1)
+    except Exception:
+        pass
+
 
 def require_password() -> bool:
     """Render the gate UI if needed. Returns True when authenticated.
@@ -1515,8 +1620,22 @@ def require_password() -> bool:
     Mirrors the Code Charlie gate: full-screen dark/indigo splash with the
     Debbie logo (responsive — sized off viewport height/width) and a password
     form. When False, the caller should st.stop() so nothing else renders.
+
+    A valid gate cookie (issued after a successful login) skips the form on
+    later visits/reloads for 30 days.
     """
     if st.session_state.get("authenticated"):
+        # Re-issue the cookie once per session so logins stay sticky across
+        # reloads (st.rerun() after submit skips any script emitted there).
+        if not st.session_state.get("_gate_cookie_sent"):
+            if not _cookie_authenticated():
+                _issue_gate_cookie()
+            st.session_state["_gate_cookie_sent"] = True
+        return True
+
+    if _cookie_authenticated():
+        st.session_state["authenticated"] = True
+        st.session_state["_gate_cookie_sent"] = True
         return True
 
     font_data_uri = _file_data_uri(DISPLAY_FONT_PATH, "font/woff2")
@@ -1805,6 +1924,18 @@ def _redo_clicked() -> None:
     regenerate_active_view()
 
 
+def _undo_redo_row() -> None:
+    """Undo / Redo under the preview image — whole-sketch history (manual +
+    Debbie edits), mirroring the web page's placement."""
+    uc1, uc2 = st.columns(2)
+    with uc1:
+        st.button("↩ Undo", key=_wk("undo"), width="stretch",
+                  disabled=not can_undo(), on_click=_undo_clicked)
+    with uc2:
+        st.button("↪ Redo", key=_wk("redo"), width="stretch",
+                  disabled=not can_redo(), on_click=_redo_clicked)
+
+
 # =============================================================================
 # Main app
 # =============================================================================
@@ -2033,14 +2164,13 @@ def main():
 
         st.divider()
 
-        # Undo / Redo — whole-sketch history (manual + Debbie edits)
-        uc1, uc2 = st.columns(2)
-        with uc1:
-            st.button("↩ Undo", key=_wk("undo"), width="stretch",
-                      disabled=not can_undo(), on_click=_undo_clicked)
-        with uc2:
-            st.button("↪ Redo", key=_wk("redo"), width="stretch",
-                      disabled=not can_redo(), on_click=_redo_clicked)
+        # Auto-generate: re-render the active view's preview after every edit
+        # (manual, Debbie, undo/redo). UI preference — not part of the config.
+        st.checkbox(
+            "Auto-generate preview", key="auto_generate",
+            help="Re-render the preview automatically after every change "
+                 "(adds ~1s per edit on large sketches).",
+        )
 
         st.button("Clear All", type="secondary", width="stretch",
                   key=_wk("clear_all"), on_click=_clear_all,
@@ -2056,6 +2186,13 @@ def main():
     multi_core = len(cfg["cores"]) > 1
     machine_type = cfg["machine_type"]
     active_view = st.session_state["ui_active_view"]
+
+    # Auto-generate: re-render once per config revision. The generate functions
+    # stamp _autogen_rev, so paths that already rendered (Debbie, undo/redo,
+    # the Generate button, the carousel) are not rendered twice.
+    if (st.session_state.get("auto_generate")
+            and st.session_state["_autogen_rev"] != st.session_state["rev"]):
+        regenerate_active_view()
 
     # ── Plan View ──
     if active_view == "plan":
@@ -2186,6 +2323,7 @@ def main():
 
             if st.session_state.get("plan_image"):
                 st.image(st.session_state["plan_image"], width="stretch")
+                _undo_redo_row()
                 st.download_button(
                     label="Download PNG",
                     data=st.session_state["plan_image"],
@@ -2261,6 +2399,7 @@ def main():
 
             if st.session_state.get("section_image"):
                 st.image(st.session_state["section_image"], width="stretch")
+                _undo_redo_row()
                 st.download_button(
                     label="Download PNG",
                     data=st.session_state["section_image"],

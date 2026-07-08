@@ -19,8 +19,12 @@ except ImportError:
     import config
 
 
+# NOTE: intentional divergence from the KARR AI engine copy — no "Group
+# Control" / "Speed" columns here. Those values are stamped from the Space
+# Planning table during KARR AI report generation; the standalone app has no
+# source for them (they would always read "TBC"), so the columns are dropped.
 _BRIEF_SPEC_HEADER = [
-    "Lift ID", "Usage", "Type", "Capacity", "Group Control", "Speed",
+    "Lift ID", "Usage", "Type", "Capacity",
     "Cabin W×D (mm)", "Door W×H (mm)",
 ]
 
@@ -46,20 +50,14 @@ def brief_spec_row(lc) -> List[str]:
     """Build one brief-spec table row from a lift config (duck-typed LiftConfig).
 
     Columns mirror `_BRIEF_SPEC_HEADER`:
-    [Lift ID, Usage, Type, Capacity, Group Control, Speed, Cabin W×D, Door W×H].
-
-    `lift_group_control` and `lift_speed` are sourced from the Space Planning
-    table and stamped during report generation. Both are blank in the standalone
-    preview, where they render as "TBC"."""
+    [Lift ID, Usage, Type, Capacity, Cabin W×D, Door W×H]."""
     usage = "Fire/Service" if lc.lift_type == "fire" else "Passenger"
     mtype = (lc.lift_machine_type or "").upper()
-    group = (getattr(lc, "lift_group_control", "") or "").strip() or "TBC"
-    speed = (getattr(lc, "lift_speed", "") or "").strip() or "TBC"
     cabin = f"{int(lc.finished_car_width)} × {int(lc.finished_car_depth)}"
     door = f"{int(lc.door_width)} × {int(lc.door_height)}"
     return [
         lc.lift_id or "—", usage, mtype,
-        format_brief_capacity(lc.lift_capacity), group, speed, cabin, door,
+        format_brief_capacity(lc.lift_capacity), cabin, door,
     ]
 
 
