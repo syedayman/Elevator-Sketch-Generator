@@ -740,9 +740,15 @@ def _lift_num_cb(ci: int, bank: str, idx: int, field: str, key: str,
     """on_change for a per-lift number input. Routes the edit through the given
     pure reducer (sketch_state) so manual edits match Debbie's exactly. A blank
     (None) widget stores NaN — the web's blank-cell sentinel. If blank sibling
-    cells make the linking math fail, just store the edited value raw."""
+    cells make the linking math fail, just store the edited value raw. A key
+    that no longer exists means a stale event from a previous widget revision
+    — drop it."""
+    wkey = _wk(key)
+
     def cb():
-        raw = st.session_state.get(_wk(key))
+        if wkey not in st.session_state:
+            return  # stale event from a previous widget revision
+        raw = st.session_state[wkey]
         cfg = st.session_state["config"]
         lift = _get_lift(cfg, ci, bank, idx)
         if raw is None:
@@ -856,6 +862,8 @@ def render_lift_form(ci: int, bank: str, idx: int, machine_type: str,
             st.session_state[idkey] = L.get("lift_id", "")
 
         def _cb_lift_id():
+            if idkey not in st.session_state:
+                return  # stale event from a previous widget revision
             c = st.session_state["config"]
             lift = _get_lift(c, ci, bank, idx)
             _lift_write(ci, bank, idx, {**lift, "lift_id": st.session_state[idkey]})
@@ -870,6 +878,8 @@ def render_lift_form(ci: int, bank: str, idx: int, machine_type: str,
             st.session_state[tkey] = L["type"]
 
         def _cb_type():
+            if tkey not in st.session_state:
+                return  # stale event from a previous widget revision
             new_type = st.session_state[tkey]
             c = st.session_state["config"]
             lift = _get_lift(c, ci, bank, idx)
@@ -892,6 +902,8 @@ def render_lift_form(ci: int, bank: str, idx: int, machine_type: str,
                 st.session_state[dkey] = bool(L.get("double_entrance"))
 
             def _cb_double():
+                if dkey not in st.session_state:
+                    return  # stale event from a previous widget revision
                 c = st.session_state["config"]
                 lift = _get_lift(c, ci, bank, idx)
                 try:
@@ -939,6 +951,8 @@ def render_lift_form(ci: int, bank: str, idx: int, machine_type: str,
                 st.session_state[swkey] = bool(L.get("swap_brackets", False))
 
             def _cb_swap():
+                if swkey not in st.session_state:
+                    return  # stale event from a previous widget revision
                 c = st.session_state["config"]
                 lift = _get_lift(c, ci, bank, idx)
                 _lift_write(ci, bank, idx,
@@ -970,6 +984,8 @@ def render_lift_form(ci: int, bank: str, idx: int, machine_type: str,
                 )
 
             def _cb_cabin():
+                if ckey not in st.session_state:
+                    return  # stale event from a previous widget revision
                 parsed = _parse_cabin_size(st.session_state[ckey])
                 if not parsed:
                     bump_rev()  # reset the text to the current cabin size
@@ -1100,6 +1116,8 @@ def render_lift_form(ci: int, bank: str, idx: int, machine_type: str,
                 st.session_state[otkey] = L["door_opening_type"]
 
             def _cb_door_type():
+                if otkey not in st.session_state:
+                    return  # stale event from a previous widget revision
                 c = st.session_state["config"]
                 lift = _get_lift(c, ci, bank, idx)
                 new_type = st.session_state[otkey]
@@ -1169,6 +1187,8 @@ def render_lift_form(ci: int, bank: str, idx: int, machine_type: str,
                 st.session_state[odkey] = L.get("door_offset_direction", "right")
 
             def _cb_offset_dir():
+                if odkey not in st.session_state:
+                    return  # stale event from a previous widget revision
                 c = st.session_state["config"]
                 lift = _get_lift(c, ci, bank, idx)
                 _lift_write(ci, bank, idx,
@@ -1192,8 +1212,12 @@ def render_section_form(machine_type: str) -> None:
     def num(field, label, *, seed=None, **kw):
         key = f"section_{field}"
 
+        wkey = _wk(key)
+
         def cb():
-            raw = st.session_state.get(_wk(key))
+            if wkey not in st.session_state:
+                return  # stale event from a previous widget revision
+            raw = st.session_state[wkey]
             c = st.session_state["config"]
             value = float("nan") if raw is None else raw
             set_config({**c, "section": {**c["section"], field: value}})
@@ -1857,6 +1881,8 @@ def _bool_option(field: str, label: str) -> None:
         st.session_state[k] = bool(st.session_state["config"][field])
 
     def cb():
+        if k not in st.session_state:
+            return  # stale event from a previous widget revision
         _config_write({field: st.session_state[k]})
 
     st.checkbox(label, key=k, on_change=cb)
@@ -1876,6 +1902,8 @@ def _dim_font_slider(max_pct: int, config_field: str) -> None:
         st.session_state[k] = min(st.session_state[k], max_pct)
 
     def cb():
+        if k not in st.session_state:
+            return  # stale event from a previous widget revision
         _config_write({config_field: st.session_state[k] / 100})
 
     st.slider("Font Size", min_value=50, max_value=max_pct, step=10, key=k,
@@ -1984,6 +2012,8 @@ def main():
                                       else "Section View")
 
         def _cb_view():
+            if vkey not in st.session_state:
+                return  # stale event from a previous widget revision
             st.session_state["ui_active_view"] = (
                 "plan" if st.session_state[vkey] == "Plan View" else "section")
 
@@ -2000,6 +2030,8 @@ def main():
             st.session_state[mkey] = cfg["machine_type"]
 
         def _cb_machine():
+            if mkey not in st.session_state:
+                return  # stale event from a previous widget revision
             mt = st.session_state[mkey]
             c = st.session_state["config"]
             if mt == c["machine_type"]:
@@ -2037,6 +2069,8 @@ def main():
                 st.session_state[ckey] = ci
 
             def _cb_core():
+                if ckey not in st.session_state:
+                    return  # stale event from a previous widget revision
                 st.session_state["ui_active_core"] = st.session_state[ckey]
                 bump_rev()
 
@@ -2084,6 +2118,8 @@ def main():
                 st.session_state[akey] = core["arrangement"]
 
             def _cb_arrangement():
+                if akey not in st.session_state:
+                    return  # stale event from a previous widget revision
                 val = st.session_state[akey]
                 c = st.session_state["config"]
                 aci = _active_core_index()
@@ -2110,6 +2146,8 @@ def main():
                 st.session_state[n1key] = len(core["bank1_lifts"])
 
             def _cb_n1():
+                if n1key not in st.session_state:
+                    return  # stale event from a previous widget revision
                 _set_bank_count(_active_core_index(), "bank1", int(st.session_state[n1key]))
 
             st.number_input("Number of Lifts (Bank 1)", min_value=1,
@@ -2121,6 +2159,8 @@ def main():
                     st.session_state[n2key] = max(1, len(core["bank2_lifts"]))
 
                 def _cb_n2():
+                    if n2key not in st.session_state:
+                        return  # stale event from a previous widget revision
                     _set_bank_count(_active_core_index(), "bank2", int(st.session_state[n2key]))
 
                 st.number_input("Number of Lifts (Bank 2)", min_value=1,
@@ -2217,8 +2257,12 @@ def main():
             with col_shaft1:
                 wkey = f"c{ci}_wall_thickness"
 
+                wall_key = _wk(wkey)
+
                 def _cb_wall():
-                    raw = st.session_state.get(_wk(wkey))
+                    if wall_key not in st.session_state:
+                        return  # stale event from a previous widget revision
+                    raw = st.session_state[wall_key]
                     _core_write(_active_core_index(),
                                 {"wall_thickness_mm": float("nan") if raw is None else raw})
 
@@ -2230,6 +2274,8 @@ def main():
                     st.session_state[cskey] = bool(core["common_shaft"])
 
                 def _cb_common():
+                    if cskey not in st.session_state:
+                        return  # stale event from a previous widget revision
                     _core_write(_active_core_index(),
                                 {"common_shaft": st.session_state[cskey]})
 
@@ -2240,8 +2286,12 @@ def main():
             if core["arrangement"] == "Facing":
                 lkey = f"c{ci}_lobby"
 
+                lobby_key = _wk(lkey)
+
                 def _cb_lobby():
-                    raw = st.session_state.get(_wk(lkey))
+                    if lobby_key not in st.session_state:
+                        return  # stale event from a previous widget revision
+                    raw = st.session_state[lobby_key]
                     _core_write(_active_core_index(),
                                 {"lobby_width_mm": float("nan") if raw is None else raw})
 
@@ -2268,6 +2318,8 @@ def main():
                         st.session_state[skey] = seps[gi]
 
                     def _cb_sep(bank=bank, gi=gi, skey=skey, sep_key=sep_key):
+                        if skey not in st.session_state:
+                            return  # stale event from a previous widget revision
                         c = st.session_state["config"]
                         aci = _active_core_index()
                         acore = c["cores"][aci]
@@ -2363,6 +2415,8 @@ def main():
                 st.session_state[srckey] = st.session_state["ui_section_source"]
 
             def _cb_section_source():
+                if srckey not in st.session_state:
+                    return  # stale event from a previous widget revision
                 key = st.session_state[srckey]
                 st.session_state["ui_section_source"] = key
                 m = SECTION_KEY_RE.match(key)
