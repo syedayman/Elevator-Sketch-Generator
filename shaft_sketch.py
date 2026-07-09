@@ -294,9 +294,10 @@ class LiftConfig:
         # The standalone UI still guides manual users via the door-width minimum
         # input and the cabin-size dropdown.
 
-        # Validate double_entrance (fire lifts only)
-        if self.double_entrance and self.lift_type != "fire":
-            errors.append("Double car entrance is only available for fire lifts.")
+        # Double car entrance is available for any lift type (passenger or fire).
+        # A through-car has no rear wall, so the counterweight sits on the SIDE
+        # (MRL-style) even under MRA — the geometry code already handles this via
+        # _use_mra_rear_cw, which is False whenever double_entrance is set.
 
         # Validate door_opening_type
         if self.door_opening_type not in ("centre", "telescopic"):

@@ -752,19 +752,74 @@ def apply_door_type(lift: dict, door_type: str) -> dict:
     }
 
 
-def apply_double_entrance(lift: dict, on: bool) -> dict:
-    """Double car entrance (fire only): doors on both faces; re-derive shaft
-    depth. The OFF branch uses the PANEL_THICKNESS constant, matching the form."""
+def apply_double_entrance(lift: dict, on: bool, machine_type: str) -> dict:
+    """Double car entrance (any lift type): doors on both the front and rear
+    faces. A through-car has no rear wall, so the counterweight must sit on the
+    SIDE (MRL-style) — which means an MRA passenger lift's rear counterweight
+    moves to the side when this turns on, making it geometrically identical to
+    an MRL double-entrance lift. Only that MRA-passenger case changes the
+    bracket model; for MRL (any type) and MRA fire the layout is already
+    side-CW, so only the shaft depth re-derives."""
     door_gap = lift_door_gap(lift)
+    thickness = lift.get("door_panel_thickness")
+    panel = thickness if thickness is not None else PANEL_THICKNESS_DEFAULT
+    side_cw_now = lift_is_side_cw(lift, machine_type)
+    side_cw_next = machine_type == "mrl" or lift["type"] == "fire" or on
+
+    if side_cw_now == side_cw_next:
+        # Bracket model unchanged — only depth re-derives (original behavior).
+        if on:
+            door_zone = 2 * panel + door_gap
+            return {**lift, "double_entrance": True,
+                    "shaft_depth": door_zone + lift["depth"] + door_zone}
+        uc_d = lift["depth"] + CAR_WALL_THICKNESS
+        return {**lift, "double_entrance": False,
+                "shaft_depth": 2 * PANEL_THICKNESS_DEFAULT + door_gap + uc_d + REAR_CLEARANCE}
+
+    # Bracket model changes — reached only by an MRA passenger lift.
+    rail_l, rail_r = lift_rails(lift)
+    uc_w = lift["width"] + 2 * CAR_WALL_THICKNESS
+
     if on:
-        thickness = lift.get("door_panel_thickness")
-        thickness = thickness if thickness is not None else PANEL_THICKNESS_DEFAULT
-        door_zone = 2 * thickness + door_gap
-        return {**lift, "double_entrance": True,
-                "shaft_depth": door_zone + lift["depth"] + door_zone}
+        # Rear CW → side CW: rebuild the width layout the MRL way (identical to
+        # an MRL double-entrance lift with the same car + rails), drop the
+        # rear-CW fields, and re-derive the through-car depth.
+        shaft_w = MRL_CW_BRACKET_MIN + rail_l + uc_w + MRL_CAR_BRACKET_MIN + rail_r
+        avail = shaft_w - uc_w - rail_l - rail_r
+        door_zone = 2 * panel + door_gap
+        return {
+            **lift,
+            "double_entrance": True,
+            "shaft_width": shaft_w,
+            "cw_bracket_width": MRL_CW_BRACKET_MIN,
+            "car_bracket_width": avail - MRL_CW_BRACKET_MIN,
+            "mra_left_bracket": None,
+            "mra_right_bracket": None,
+            "mra_cw_bracket_depth": None,
+            "mra_cw_gap": None,
+            "mra_cw_wall_gap": None,
+            "shaft_depth": door_zone + lift["depth"] + door_zone,
+        }
+
+    # Side CW → rear CW: restore the MRA rear-counterweight layout (fresh, like
+    # make_default_lift), drop the side-CW bracket fields.
     uc_d = lift["depth"] + CAR_WALL_THICKNESS
-    return {**lift, "double_entrance": False,
-            "shaft_depth": 2 * PANEL_THICKNESS_DEFAULT + door_gap + uc_d + REAR_CLEARANCE}
+    shaft_w = uc_w + (MRA_CAR_BRACKET_MIN + rail_l) + (MRA_CAR_BRACKET_MIN + rail_r)
+    avail = shaft_w - uc_w - rail_l - rail_r
+    return {
+        **lift,
+        "double_entrance": False,
+        "shaft_width": shaft_w,
+        "cw_bracket_width": None,
+        "car_bracket_width": None,
+        "mra_left_bracket": MRA_CAR_BRACKET_MIN,
+        "mra_right_bracket": avail - MRA_CAR_BRACKET_MIN,
+        "mra_cw_bracket_depth": MRA_CW_BRACKET_DEPTH_MIN,
+        "mra_cw_gap": MRA_CW_GAP_MIN,
+        "mra_cw_wall_gap": MRA_CW_WALL_GAP_MIN,
+        "shaft_depth": (2 * panel + door_gap + uc_d + MRA_CW_GAP_MIN
+                        + MRA_CW_BRACKET_DEPTH_MIN + MRA_CW_WALL_GAP_MIN),
+    }
 
 
 def apply_door_panel_thickness(lift: dict, mm) -> dict:

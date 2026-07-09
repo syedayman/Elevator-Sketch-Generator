@@ -379,22 +379,15 @@ def apply_operations(cfg: dict, ops: list, active_core: int = 0):
                     results.append(_rejected(op, "No lift matched that target."))
                     continue
                 ok_count = 0
-                blocked = []
                 for ci, bank, idx, _ in targets:
                     lift = _get_lift(working, ci, bank, idx)
-                    if flag == "double_entrance" and lift["type"] != "fire":
-                        blocked.append(f"{lift.get('lift_id')} (double entrance is fire-only)")
-                        continue
-                    nxt = (apply_double_entrance(lift, value) if flag == "double_entrance"
+                    nxt = (apply_double_entrance(lift, value, working["machine_type"])
+                           if flag == "double_entrance"
                            else {**lift, "swap_brackets": value})
                     working = _replace_lift(working, ci, bank, idx, nxt)
                     ok_count += 1
-                if ok_count > 0:
-                    detail = f"{'Enabled' if value else 'Disabled'} {flag} on {ok_count} lift(s)"
-                    detail += f"; skipped {', '.join(blocked)}" if blocked else "."
-                    results.append(_applied(op, detail))
-                else:
-                    results.append(_rejected(op, ", ".join(blocked) or "No change."))
+                results.append(_applied(
+                    op, f"{'Enabled' if value else 'Disabled'} {flag} on {ok_count} lift(s)."))
 
             elif name == "add_lift":
                 if not working["cores"]:

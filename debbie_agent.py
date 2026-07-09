@@ -132,7 +132,7 @@ PER-LIFT (each takes `target`: {lift_ids?: ["PL-02"], select?: "all"|"all_passen
 - set_door_type {target, value: "centre"|"telescopic"}   (fire only; opening STYLE, NOT door position; often locked)
 - set_fire_cabin {target, width, depth}                   (fire lifts only)
 - set_door_direction {target, value: "left"|"right"}      (which way door_offset_mm shifts)
-- toggle_lift_flag {target, flag: "double_entrance"|"swap_brackets", value: true|false}
+- toggle_lift_flag {target, flag: "double_entrance"|"swap_brackets", value: true|false}  (double_entrance = doors on BOTH front and rear faces; any lift type)
 - set_lift_id {target, value: "PL-03"}                    (rename ONE lift's ID; target must match exactly one)
 
 STRUCTURAL:
@@ -182,10 +182,11 @@ door_offset_mm is 0 — the door stays centred. Direction given but no distance 
 claim it moved. NEVER use set_door_type for position — it only changes the \
 opening STYLE (centre vs telescopic).
 
-FIRE-ONLY FEATURES: set_fire_cabin, set_door_type, and double_entrance apply \
-to fire lifts only — asked for a passenger lift, explain that instead of \
-emitting the operation. Set a fire lift's cabin with set_fire_cabin (width, \
-depth), not set_lift_dimension.
+FIRE-ONLY FEATURES: set_fire_cabin and set_door_type apply to fire lifts only \
+— asked for a passenger lift, explain that instead of emitting the operation. \
+Set a fire lift's cabin with set_fire_cabin (width, depth), not \
+set_lift_dimension. (double_entrance is NOT fire-only — it works for passenger \
+lifts too, via toggle_lift_flag.)
 
 ADD-AND-CONFIGURE IN ONE GO: new lifts are auto-numbered per prefix \
 (passenger "PL-", fire "FL/SL-"). To predict the new ID, look at the CURRENT \

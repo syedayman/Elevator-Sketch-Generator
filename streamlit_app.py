@@ -895,25 +895,26 @@ def render_lift_form(ci: int, bank: str, idx: int, machine_type: str,
             key=tkey, on_change=_cb_type,
         )
 
-        # Double Car Entrance (fire only)
-        if is_fire:
-            dkey = _wk(f"{prefix}_double")
+        # Double Car Entrance — doors on both front and rear faces (any lift
+        # type). Turning it on moves an MRA lift's counterweight to the side (a
+        # through-car has no rear wall for it).
+        dkey = _wk(f"{prefix}_double")
+        if dkey not in st.session_state:
+            st.session_state[dkey] = bool(L.get("double_entrance"))
+
+        def _cb_double():
             if dkey not in st.session_state:
-                st.session_state[dkey] = bool(L.get("double_entrance"))
+                return  # stale event from a previous widget revision
+            c = st.session_state["config"]
+            lift = _get_lift(c, ci, bank, idx)
+            try:
+                _lift_write(ci, bank, idx,
+                            ss.apply_double_entrance(lift, st.session_state[dkey], machine_type))
+            except TypeError:
+                _lift_write(ci, bank, idx,
+                            {**lift, "double_entrance": st.session_state[dkey]})
 
-            def _cb_double():
-                if dkey not in st.session_state:
-                    return  # stale event from a previous widget revision
-                c = st.session_state["config"]
-                lift = _get_lift(c, ci, bank, idx)
-                try:
-                    _lift_write(ci, bank, idx,
-                                ss.apply_double_entrance(lift, st.session_state[dkey]))
-                except TypeError:
-                    _lift_write(ci, bank, idx,
-                                {**lift, "double_entrance": st.session_state[dkey]})
-
-            st.checkbox("Double Car Entrance", key=dkey, on_change=_cb_double)
+        st.checkbox("Double Car Entrance", key=dkey, on_change=_cb_double)
 
         # Shaft Dimensions
         st.markdown("**Shaft Dimensions**")
