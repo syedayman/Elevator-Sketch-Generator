@@ -1394,6 +1394,8 @@ def draw_lift_doors(
     structural_opening_width: float = None,
     door_extension: float = None,
     door_thickness: float = None,
+    car_door_thickness: float = None,
+    landing_door_thickness: float = None,
     door_gap: float = None,
     mirrored: bool = False,
     door_opening_type: str = "centre",
@@ -1432,6 +1434,11 @@ def draw_lift_doors(
         door_extension = config.DEFAULT_DOOR_EXTENSION
     if door_thickness is None:
         door_thickness = config.DEFAULT_LIFT_DOOR_THICKNESS
+    # Each door set is two panels: the landing door (outer, at the shaft wall)
+    # and the car door (inner, touching the cabin). They may have independent
+    # thicknesses; a caller passing only the legacy `door_thickness` gets both.
+    car_t = car_door_thickness if car_door_thickness is not None else door_thickness
+    landing_t = landing_door_thickness if landing_door_thickness is not None else door_thickness
     if door_gap is None:
         door_gap = config.DEFAULT_DOOR_GAP
 
@@ -1449,17 +1456,27 @@ def draw_lift_doors(
         door_rect_width = 2 * door_width + 2 * door_extension
         door_rect_left = center_x - door_rect_width / 2
 
+    # Per-panel heights follow the physical role (landing = wall side, car =
+    # cabin side) so split thicknesses land on the correct panel. The variable
+    # NAMES below keep their historical positional meaning (car_door_* = the
+    # near-wall rectangle in mirrored mode) purely to preserve the telescopic
+    # stagger mapping; heights are assigned per role. At equal thickness this
+    # reproduces the previous geometry exactly.
     if mirrored:
-        # Mirrored: doors extend downward from wall_inner_y
-        # Car door is closer to the wall, landing door is further into shaft
-        car_door_y = wall_inner_y - door_thickness
-        landing_door_y = car_door_y - door_gap - door_thickness
+        # Mirrored: doors extend downward from wall_inner_y. The near-wall
+        # rectangle is the LANDING door; the deeper one (toward the cabin) is the
+        # CAR door.
+        car_door_h = landing_t
+        landing_door_h = car_t
+        car_door_y = wall_inner_y - car_door_h
+        landing_door_y = car_door_y - door_gap - landing_door_h
     else:
-        # Normal: doors extend upward from wall_inner_y
-        # Landing door position (touching inner edge of front wall)
+        # Normal: doors extend upward from wall_inner_y. Landing door at the wall,
+        # car door deeper (touching the cabin).
+        landing_door_h = landing_t
+        car_door_h = car_t
         landing_door_y = wall_inner_y
-        # Car door position (above landing door + gap)
-        car_door_y = wall_inner_y + door_thickness + door_gap
+        car_door_y = wall_inner_y + landing_door_h + door_gap
 
     # Telescopic: stagger the bold inner rectangle — near-wall door -> left, deeper -> right.
     # (Mirrored Bank-2: the car door is the near-wall one, so the sides swap.)
@@ -1475,7 +1492,7 @@ def draw_lift_doors(
     landing_door = Rectangle(
         (door_rect_left, landing_door_y),
         door_rect_width,
-        door_thickness,
+        landing_door_h,
         facecolor=config.LIFT_DOOR_FILL_COLOR,
         edgecolor=config.LIFT_DOOR_EDGE_COLOR,
         linewidth=config.LIFT_DOOR_EDGE_WIDTH,
@@ -1485,7 +1502,7 @@ def draw_lift_doors(
 
     # Draw inner details for landing door
     _draw_door_inner_details(
-        ax, door_rect_left, door_rect_width, landing_door_y, door_thickness, door_width,
+        ax, door_rect_left, door_rect_width, landing_door_y, landing_door_h, door_width,
         door_opening_center_x=center_x,
         telescopic_side=landing_side,
     )
@@ -1494,7 +1511,7 @@ def draw_lift_doors(
     car_door = Rectangle(
         (door_rect_left, car_door_y),
         door_rect_width,
-        door_thickness,
+        car_door_h,
         facecolor=config.LIFT_DOOR_FILL_COLOR,
         edgecolor=config.LIFT_DOOR_EDGE_COLOR,
         linewidth=config.LIFT_DOOR_EDGE_WIDTH,
@@ -1504,21 +1521,22 @@ def draw_lift_doors(
 
     # Draw inner details for car door
     _draw_door_inner_details(
-        ax, door_rect_left, door_rect_width, car_door_y, door_thickness, door_width,
+        ax, door_rect_left, door_rect_width, car_door_y, car_door_h, door_width,
         door_opening_center_x=center_x,
         telescopic_side=car_side,
     )
 
-    # Return geometry info for car connection
+    # Return geometry info for car connection. In both modes this is the face of
+    # the door set that touches the cabin (deepest into the shaft).
     if mirrored:
         return {
-            'car_door_top_y': landing_door_y,  # Bottom of doors in mirrored mode
+            'car_door_top_y': landing_door_y,  # deep face (mirrored: cabin side)
             'door_rect_left': door_rect_left,
             'door_rect_width': door_rect_width,
         }
     else:
         return {
-            'car_door_top_y': car_door_y + door_thickness,
+            'car_door_top_y': car_door_y + car_door_h,
             'door_rect_left': door_rect_left,
             'door_rect_width': door_rect_width,
         }

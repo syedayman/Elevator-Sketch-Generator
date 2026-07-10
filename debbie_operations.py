@@ -24,7 +24,8 @@ from sketch_state import (
     apply_car_width,
     apply_cw_bracket,
     apply_door_gap,
-    apply_door_panel_thickness,
+    apply_car_door_thickness,
+    apply_landing_door_thickness,
     apply_door_type,
     apply_door_width,
     apply_double_entrance,
@@ -54,6 +55,7 @@ from sketch_state import (
 LIFT_DIMENSION_FIELDS = frozenset([
     "capacity", "width", "depth", "cabin_height", "shaft_width", "shaft_depth",
     "door_width", "door_height", "door_panel_length", "door_panel_thickness",
+    "car_door_thickness", "landing_door_thickness",
     "structural_opening_width", "structural_opening_height",
     "telescopic_left_ext", "telescopic_right_ext",
     "cw_bracket_width", "car_bracket_width",
@@ -200,8 +202,13 @@ def _apply_lift_field_change(lift: dict, field: str, value, machine_type: str) -
         return apply_door_width(lift, value)
     if field == "door_gap":
         return apply_door_gap(lift, value)
+    if field == "car_door_thickness":
+        return apply_car_door_thickness(lift, value)
+    if field == "landing_door_thickness":
+        return apply_landing_door_thickness(lift, value)
     if field == "door_panel_thickness":
-        return apply_door_panel_thickness(lift, value)
+        # Legacy single control — set both panels for back-compat.
+        return apply_landing_door_thickness(apply_car_door_thickness(lift, value), value)
     if field == "cw_bracket_width":
         return apply_cw_bracket(lift, value)
     if field == "car_bracket_width":

@@ -123,11 +123,16 @@ operation is an object with an `op` field plus its parameters:
 PER-LIFT (each takes `target`: {lift_ids?: ["PL-02"], select?: "all"|"all_passenger"|"all_fire", core?: "Core 1"}):
 - set_lift_dimension {target, field, value}  — field is one of: capacity, width, depth,
   cabin_height, shaft_width, shaft_depth, door_width, door_height, door_panel_length,
-  door_panel_thickness, structural_opening_width, structural_opening_height,
-  telescopic_left_ext, telescopic_right_ext, cw_bracket_width, car_bracket_width,
-  rail_width_left, rail_width_right, door_gap, cw_box_width, cw_box_depth,
-  mra_cw_box_width, mra_left_bracket, mra_right_bracket, mra_cw_bracket_depth,
-  mra_cw_gap, mra_cw_wall_gap, door_offset_mm, pit_depth, overhead_clearance
+  car_door_thickness, landing_door_thickness, structural_opening_width,
+  structural_opening_height, telescopic_left_ext, telescopic_right_ext,
+  cw_bracket_width, car_bracket_width, rail_width_left, rail_width_right, door_gap,
+  cw_box_width, cw_box_depth, mra_cw_box_width, mra_left_bracket, mra_right_bracket,
+  mra_cw_bracket_depth, mra_cw_gap, mra_cw_wall_gap, door_offset_mm, pit_depth,
+  overhead_clearance
+  (Each door has two panels sharing one WIDTH: the car door — inner, touching the
+  cabin — and the landing door — outer, at the shaft wall. Their THICKNESSES are
+  independent: car_door_thickness and landing_door_thickness. "door thickness"
+  with no side named is ambiguous — ask which door, or set both.)
 - set_lift_type {target, value: "passenger"|"fire"}
 - set_door_type {target, value: "centre"|"telescopic"}   (fire only; opening STYLE, NOT door position; often locked)
 - set_fire_cabin {target, width, depth}                   (fire lifts only)

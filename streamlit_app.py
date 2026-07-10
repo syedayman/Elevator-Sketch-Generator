@@ -627,7 +627,13 @@ def build_lift_config(lift_data: dict, machine_type: str, wall_thickness: float)
         "finished_car_depth": lift_data.get("depth", 1600),
         "door_width": door_width,
         "door_height": lift_data.get("door_height", 2100),
+        # Split door-panel thicknesses (car = inner/cabin side, landing =
+        # outer/wall side); fall back to the legacy single thickness when unset.
         "door_panel_thickness": lift_data.get("door_panel_thickness", 150),
+        "car_door_thickness": lift_data.get(
+            "car_door_thickness", lift_data.get("door_panel_thickness", 150)),
+        "landing_door_thickness": lift_data.get(
+            "landing_door_thickness", lift_data.get("door_panel_thickness", 150)),
         "door_extension": door_extension,
         "structural_opening_width": lift_data.get("structural_opening_width", 1300),
         "structural_opening_height": lift_data.get("structural_opening_height", 2200),
@@ -818,6 +824,24 @@ def _parse_cabin_size(text: str):
 # =============================================================================
 # Per-lift config form — config-driven port of the web LiftConfigForm
 # =============================================================================
+
+def _door_thickness_inputs(num, L: dict) -> None:
+    """Render the two door-panel thickness inputs (shared by the centre and
+    telescopic branches). Car door = inner (cabin side); landing door = outer
+    (shaft-wall side). Width is shared; only thickness is split. Seeds resolve
+    the legacy single thickness so older lifts show the right value."""
+    tt1, tt2 = st.columns(2)
+    with tt1:
+        num("car_door_thickness", "Car Door Thickness (mm)", min_value=50,
+            max_value=300, step=10, reducer=ss.apply_car_door_thickness,
+            seed=ss.lift_car_door_thickness(L),
+            help="Thickness of the car door (inner panel touching the cabin).")
+    with tt2:
+        num("landing_door_thickness", "Landing Door Thickness (mm)", min_value=50,
+            max_value=300, step=10, reducer=ss.apply_landing_door_thickness,
+            seed=ss.lift_landing_door_thickness(L),
+            help="Thickness of the landing door (outer panel at the shaft wall).")
+
 
 def render_lift_form(ci: int, bank: str, idx: int, machine_type: str,
                      show_capacity: bool) -> None:
@@ -1147,8 +1171,7 @@ def render_lift_form(ci: int, bank: str, idx: int, machine_type: str,
                     max_value=1000, step=25,
                     seed=L.get("telescopic_right_ext") if L.get("telescopic_right_ext") is not None
                     else ss.TELESCOPIC_RIGHT_EXT)
-            num("door_panel_thickness", "Door Panel Thickness (mm)", min_value=50,
-                max_value=300, step=10, reducer=ss.apply_door_panel_thickness)
+            _door_thickness_inputs(num, L)
         else:
             panel_seed = L.get("door_panel_length")
             if panel_seed is None and L.get("door_width") is not None \
@@ -1157,15 +1180,11 @@ def render_lift_form(ci: int, bank: str, idx: int, machine_type: str,
                     and not ss.is_blank(L.get("shaft_width")):
                 panel_seed = min(2 * L["door_width"] + 2 * ss.DEFAULT_DOOR_EXTENSION,
                                  L["shaft_width"])
-            pc1, pc2 = st.columns(2)
-            with pc1:
-                # No min/max on the widget so an auto-grown value past 6000
-                # doesn't raise; user edits are clamped to [500, 6000].
-                num("door_panel_length", "Door Panel Length (mm)", step=50,
-                    clamp=lambda v: max(500, min(6000, v)), seed=panel_seed)
-            with pc2:
-                num("door_panel_thickness", "Door Panel Thickness (mm)", min_value=50,
-                    max_value=300, step=10, reducer=ss.apply_door_panel_thickness)
+            # No min/max on the widget so an auto-grown value past 6000
+            # doesn't raise; user edits are clamped to [500, 6000].
+            num("door_panel_length", "Door Panel Length (mm)", step=50,
+                clamp=lambda v: max(500, min(6000, v)), seed=panel_seed)
+            _door_thickness_inputs(num, L)
 
         sc1, sc2 = st.columns(2)
         with sc1:

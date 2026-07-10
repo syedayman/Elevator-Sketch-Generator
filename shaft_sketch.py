@@ -123,8 +123,16 @@ class LiftConfig:
     structural_opening_width: float = field(default_factory=lambda: config.DEFAULT_STRUCTURAL_OPENING_WIDTH)
     structural_opening_height: float = field(default_factory=lambda: config.DEFAULT_STRUCTURAL_OPENING_HEIGHT)
 
-    # Door panel dimensions (affects shaft depth calculation)
+    # Door panel dimensions (affects shaft depth calculation).
+    # Each lift door is two panels: the landing door (outer, at the shaft wall)
+    # and the car door (inner, touching the cabin). They share one width but may
+    # have independent thicknesses. `door_panel_thickness` is the legacy single
+    # thickness kept as the fallback for both when the split values are unset
+    # (so older callers / saved configs keep working); read thickness via the
+    # car_door_t / landing_door_t / door_zone_depth properties below.
     door_panel_thickness: float = field(default_factory=lambda: config.DEFAULT_LIFT_DOOR_THICKNESS)
+    car_door_thickness: Optional[float] = None      # None → falls back to door_panel_thickness
+    landing_door_thickness: Optional[float] = None  # None → falls back to door_panel_thickness
     door_extension: float = field(default_factory=lambda: config.DEFAULT_DOOR_EXTENSION)
 
     # Telescopic door parameters (fire lifts only)
@@ -192,20 +200,41 @@ class LiftConfig:
         return width
 
     @property
+    def car_door_t(self) -> float:
+        """Car door (inner, cabin side) thickness — falls back to the legacy
+        single thickness when the split value is unset."""
+        return (self.car_door_thickness
+                if self.car_door_thickness is not None else self.door_panel_thickness)
+
+    @property
+    def landing_door_t(self) -> float:
+        """Landing door (outer, shaft-wall side) thickness — falls back to the
+        legacy single thickness when the split value is unset."""
+        return (self.landing_door_thickness
+                if self.landing_door_thickness is not None else self.door_panel_thickness)
+
+    @property
+    def door_zone_depth(self) -> float:
+        """Depth occupied by one door set = landing door + running clearance +
+        car door. This is the distance from the shaft wall to the cabin (and,
+        for a double entrance, is the same at the rear). Replaces the old
+        `2 * door_panel_thickness + door_gap` now that the two panels can differ."""
+        return self.landing_door_t + self.door_gap + self.car_door_t
+
+    @property
     def min_shaft_depth(self) -> float:
         """Calculate minimum shaft depth from car + doors + clearances."""
         if self.double_entrance:
             # Double entrance: front door zone + finished car + rear door zone
             # No rear car wall — both sides are door openings
-            door_zone = 2 * self.door_panel_thickness + self.door_gap
-            return door_zone + self.finished_car_depth + door_zone
+            return self.door_zone_depth + self.finished_car_depth + self.door_zone_depth
         if self.mra_rear_cw:
-            return (2 * self.door_panel_thickness + self.door_gap
+            return (self.door_zone_depth
                     + self.unfinished_car_depth + config.MRA_CW_GAP
                     + self.mra_cw_bracket_depth + self.mra_cw_wall_gap)
         else:
-            return (self.unfinished_car_depth + 2 * self.door_panel_thickness
-                    + self.door_gap + config.DEFAULT_REAR_CLEARANCE)
+            return (self.unfinished_car_depth + self.door_zone_depth
+                    + config.DEFAULT_REAR_CLEARANCE)
 
     @property
     def shaft_width(self) -> float:
@@ -263,22 +292,22 @@ class LiftConfig:
 
     def _depth_breakdown_str(self) -> str:
         """Return a human-readable breakdown of minimum shaft depth components."""
+        doors = (f"Landing Door ({int(self.landing_door_t)}) + "
+                 f"Gap ({int(self.door_gap)}) + Car Door ({int(self.car_door_t)})")
         if self.double_entrance:
-            dz = 2 * int(self.door_panel_thickness) + int(self.door_gap)
+            dz = int(self.door_zone_depth)
             return (f"Front Door Zone ({dz}) + "
                     f"Finished Car ({int(self.finished_car_depth)}) + "
                     f"Rear Door Zone ({dz})")
         if self.mra_rear_cw:
-            return (f"2 x Door ({int(self.door_panel_thickness)}) + "
-                    f"Gap ({int(self.door_gap)}) + "
+            return (f"{doors} + "
                     f"Unfinished Car ({int(self.unfinished_car_depth)}) + "
                     f"CWT Gap ({int(config.MRA_CW_GAP)}) + "
                     f"CWT Bracket ({int(self.mra_cw_bracket_depth)}) + "
                     f"CWT Wall Gap ({int(self.mra_cw_wall_gap)})")
         else:
             return (f"Unfinished Car ({int(self.unfinished_car_depth)}) + "
-                    f"2 x Door ({int(self.door_panel_thickness)}) + "
-                    f"Gap ({int(self.door_gap)}) + "
+                    f"{doors} + "
                     f"Rear Clearance ({int(config.DEFAULT_REAR_CLEARANCE)})")
 
     def __post_init__(self):
@@ -916,7 +945,7 @@ class LiftShaftSketch:
             # Horizontal centerline through car cabin center (front-fixed car)
             if self._use_enhanced_api and self.lifts:
                 lift = self.lifts[0]
-                door_zone = 2 * lift.door_panel_thickness + lift.door_gap
+                door_zone = lift.door_zone_depth
                 center_y = wt + door_zone + lift.finished_car_depth / 2
             else:
                 center_y = wt + sd / 2
@@ -988,7 +1017,8 @@ class LiftShaftSketch:
                 wall_inner_y=shaft_y,  # At y = wall_thickness (inner edge of front wall)
                 door_width=lift_config.door_width,
                 door_extension=lift_config.door_extension,
-                door_thickness=lift_config.door_panel_thickness,
+                car_door_thickness=lift_config.car_door_t,
+                landing_door_thickness=lift_config.landing_door_t,
                 door_gap=lift_config.door_gap,
                 door_opening_type=lift_config.door_opening_type,
                 telescopic_left_ext=lift_config.telescopic_left_ext,
@@ -1004,7 +1034,8 @@ class LiftShaftSketch:
                     wall_inner_y=rear_wall_inner_y,
                     door_width=lift_config.door_width,
                     door_extension=lift_config.door_extension,
-                    door_thickness=lift_config.door_panel_thickness,
+                    car_door_thickness=lift_config.car_door_t,
+                    landing_door_thickness=lift_config.landing_door_t,
                     door_gap=lift_config.door_gap,
                     mirrored=True,
                     door_opening_type=lift_config.door_opening_type,
@@ -1015,7 +1046,7 @@ class LiftShaftSketch:
 
         # Car vertical position (front-fixed). Brackets centre on the car depth
         # (MRA-style) so the guide rails (also at car-depth centre) line up.
-        door_zone = 2 * lift_config.door_panel_thickness + lift_config.door_gap
+        door_zone = lift_config.door_zone_depth
         car_y = shaft_y + door_zone
         car_center_y = car_y + uc_depth / 2  # brackets centre on car depth
 
@@ -1179,7 +1210,8 @@ class LiftShaftSketch:
                 wall_inner_y=shaft_y,
                 door_width=lift_config.door_width,
                 door_extension=lift_config.door_extension,
-                door_thickness=lift_config.door_panel_thickness,
+                car_door_thickness=lift_config.car_door_t,
+                landing_door_thickness=lift_config.landing_door_t,
                 door_gap=lift_config.door_gap,
                 door_opening_type=lift_config.door_opening_type,
                 telescopic_left_ext=lift_config.telescopic_left_ext,
@@ -1195,7 +1227,8 @@ class LiftShaftSketch:
                     wall_inner_y=rear_wall_inner_y,
                     door_width=lift_config.door_width,
                     door_extension=lift_config.door_extension,
-                    door_thickness=lift_config.door_panel_thickness,
+                    car_door_thickness=lift_config.car_door_t,
+                    landing_door_thickness=lift_config.landing_door_t,
                     door_gap=lift_config.door_gap,
                     mirrored=True,
                     door_opening_type=lift_config.door_opening_type,
@@ -1206,7 +1239,7 @@ class LiftShaftSketch:
 
         # Position car so bottom touches top of car door (like MRL)
         # Door area = 2 * door_thickness + door_gap
-        car_y = shaft_y + 2 * lift_config.door_panel_thickness + lift_config.door_gap
+        car_y = shaft_y + lift_config.door_zone_depth
         car_center_y = car_y + uc_depth / 2  # brackets centre on car depth
 
         # Draw brackets
@@ -1478,7 +1511,7 @@ class LiftShaftSketch:
                 available_w = lift.shaft_width - left_cb - right_cb
                 car_x = wt + left_cb + (available_w - lift.unfinished_car_width) / 2
                 # MRA: car bottom touches top of car door
-                car_y = wt + 2 * lift.door_panel_thickness + lift.door_gap
+                car_y = wt + lift.door_zone_depth
             else:
                 # MRL, or MRA + double_entrance (uses MRL-style side brackets)
                 cwb_w = lift.counterweight_bracket_width
@@ -1488,7 +1521,7 @@ class LiftShaftSketch:
                 left_bracket_w = cb_w if self._bracket_mirror(lift, 0) else cwb_w
                 car_x = wt + left_bracket_w + (available_w - lift.unfinished_car_width) / 2
                 # Front-fixed: extra depth goes to rear clearance
-                car_y = wt + 2 * lift.door_panel_thickness + lift.door_gap
+                car_y = wt + lift.door_zone_depth
 
             finished_car_x = car_x + (lift.unfinished_car_width - lift.finished_car_width) / 2
             finished_car_y = car_y  # Same bottom as unfinished car
@@ -1802,7 +1835,7 @@ class LiftShaftSketch:
         if display_options["show_centerlines"]:
             if self._use_enhanced_api and self.lifts:
                 first = self.lifts[0]
-                door_zone = 2 * first.door_panel_thickness + first.door_gap
+                door_zone = first.door_zone_depth
                 center_y = wt + door_zone + first.finished_car_depth / 2
             else:
                 center_y = wt + max_sd / 2
@@ -1964,7 +1997,7 @@ class LiftShaftSketch:
                     right_cb = lift.mra_right_bracket_width
                     available_w = lift.shaft_width - left_cb - right_cb
                     car_x = shaft_left + left_cb + (available_w - lift.unfinished_car_width) / 2
-                    car_y = wt + 2 * lift.door_panel_thickness + lift.door_gap
+                    car_y = wt + lift.door_zone_depth
                 else:
                     # MRL, or MRA + double_entrance: center car between brackets
                     if not mirror:
@@ -1978,7 +2011,7 @@ class LiftShaftSketch:
                         available_w = lift.shaft_width - cb_w - cwb_w
                         car_x = shaft_left + cb_w + (available_w - lift.unfinished_car_width) / 2
                     # Front-fixed: extra depth goes to rear clearance
-                    car_y = wt + 2 * lift.door_panel_thickness + lift.door_gap
+                    car_y = wt + lift.door_zone_depth
 
                 finished_car_x = car_x + (lift.unfinished_car_width - lift.finished_car_width) / 2
                 finished_car_y = car_y
@@ -2102,14 +2135,14 @@ class LiftShaftSketch:
                 right_cb = first_lift.mra_right_bracket_width
                 available_w = first_lift.shaft_width - left_cb - right_cb
                 first_car_x = first_shaft_left + left_cb + (available_w - first_lift.unfinished_car_width) / 2
-                first_car_y = wt + 2 * first_lift.door_panel_thickness + first_lift.door_gap
+                first_car_y = wt + first_lift.door_zone_depth
             else:
                 # First lift is never mirrored (lift_idx 0)
                 cwb_w = first_lift.counterweight_bracket_width
                 cb_w = first_lift.car_bracket_width
                 available_w = first_lift.shaft_width - cwb_w - cb_w
                 first_car_x = first_shaft_left + cwb_w + (available_w - first_lift.unfinished_car_width) / 2
-                first_car_y = wt + 2 * first_lift.door_panel_thickness + first_lift.door_gap
+                first_car_y = wt + first_lift.door_zone_depth
 
             first_finished_car_x = first_car_x + (first_lift.unfinished_car_width - first_lift.finished_car_width) / 2
 
@@ -2153,7 +2186,7 @@ class LiftShaftSketch:
                         right_cb = last_lift.mra_right_bracket_width
                         available_w = last_lift.shaft_width - left_cb - right_cb
                         last_car_x = last_shaft_left + left_cb + (available_w - last_lift.unfinished_car_width) / 2
-                        last_car_y = wt + 2 * last_lift.door_panel_thickness + last_lift.door_gap
+                        last_car_y = wt + last_lift.door_zone_depth
                     else:
                         if not last_mirror:
                             cwb_w = last_lift.counterweight_bracket_width
@@ -2165,7 +2198,7 @@ class LiftShaftSketch:
                             cwb_w = last_lift.counterweight_bracket_width
                             available_w = last_lift.shaft_width - cb_w - cwb_w
                             last_car_x = last_shaft_left + cb_w + (available_w - last_lift.unfinished_car_width) / 2
-                        last_car_y = wt + 2 * last_lift.door_panel_thickness + last_lift.door_gap
+                        last_car_y = wt + last_lift.door_zone_depth
 
                     last_finished_car_x = last_car_x + (last_lift.unfinished_car_width - last_lift.finished_car_width) / 2
                     last_car_right_x = last_car_x + last_lift.unfinished_car_width
@@ -2306,7 +2339,7 @@ class LiftShaftSketch:
         # centerlines are drawn per lift inside _draw_bank().
         if display_options["show_centerlines"]:
             bank1_lift = self.lifts[0]
-            bank1_door_zone = 2 * bank1_lift.door_panel_thickness + bank1_lift.door_gap
+            bank1_door_zone = bank1_lift.door_zone_depth
             bank1_center_y = (
                 self._bank1_y
                 + wt
@@ -2317,7 +2350,7 @@ class LiftShaftSketch:
 
             bank2_lift = self.lifts_bank2[0]
             bank2_sd = self._shaft_depths_bank2[0]
-            bank2_door_zone = 2 * bank2_lift.door_panel_thickness + bank2_lift.door_gap
+            bank2_door_zone = bank2_lift.door_zone_depth
             bank2_shaft_y = self._bank2_y + wt + (self._max_shaft_depth_bank2 - bank2_sd)
             bank2_center_y = (
                 bank2_shaft_y
@@ -2666,7 +2699,7 @@ class LiftShaftSketch:
 
         # In mirrored orientation, doors are at top (high Y), back is at bottom (low Y)
         # Car Y position: front-fixed (mirrored: door at top, so car top touches door zone)
-        door_zone = 2 * lift_config.door_panel_thickness + lift_config.door_gap
+        door_zone = lift_config.door_zone_depth
         car_y = shaft_interior_y + sd - door_zone - uc_depth
         car_center_y = car_y + uc_depth / 2  # brackets centre on car depth
 
@@ -2680,7 +2713,8 @@ class LiftShaftSketch:
                 wall_inner_y=shaft_interior_y + sd,  # Top of shaft interior
                 door_width=lift_config.door_width,
                 door_extension=lift_config.door_extension,
-                door_thickness=lift_config.door_panel_thickness,
+                car_door_thickness=lift_config.car_door_t,
+                landing_door_thickness=lift_config.landing_door_t,
                 door_gap=lift_config.door_gap,
                 mirrored=True,  # Draw doors facing down (into shaft)
                 door_opening_type=lift_config.door_opening_type,
@@ -2696,7 +2730,8 @@ class LiftShaftSketch:
                     wall_inner_y=shaft_interior_y,
                     door_width=lift_config.door_width,
                     door_extension=lift_config.door_extension,
-                    door_thickness=lift_config.door_panel_thickness,
+                    car_door_thickness=lift_config.car_door_t,
+                    landing_door_thickness=lift_config.landing_door_t,
                     door_gap=lift_config.door_gap,
                     mirrored=False,
                     door_opening_type=lift_config.door_opening_type,
@@ -2849,7 +2884,7 @@ class LiftShaftSketch:
 
         car_center_x = car_x + uc_width / 2
         door_center_x = car_center_x + lift_config.door_offset_x
-        car_y = shaft_y + sd - 2 * lift_config.door_panel_thickness - lift_config.door_gap - uc_depth
+        car_y = shaft_y + sd - lift_config.door_zone_depth - uc_depth
         car_center_y = car_y + uc_depth / 2  # brackets centre on car depth
 
         # Draw lift doors (at top of shaft)
@@ -2860,7 +2895,8 @@ class LiftShaftSketch:
                 wall_inner_y=shaft_y + sd,
                 door_width=lift_config.door_width,
                 door_extension=lift_config.door_extension,
-                door_thickness=lift_config.door_panel_thickness,
+                car_door_thickness=lift_config.car_door_t,
+                landing_door_thickness=lift_config.landing_door_t,
                 door_gap=lift_config.door_gap,
                 mirrored=True,
                 door_opening_type=lift_config.door_opening_type,
@@ -2876,7 +2912,8 @@ class LiftShaftSketch:
                     wall_inner_y=shaft_y,
                     door_width=lift_config.door_width,
                     door_extension=lift_config.door_extension,
-                    door_thickness=lift_config.door_panel_thickness,
+                    car_door_thickness=lift_config.car_door_t,
+                    landing_door_thickness=lift_config.landing_door_t,
                     door_gap=lift_config.door_gap,
                     mirrored=False,
                     door_opening_type=lift_config.door_opening_type,
@@ -3095,7 +3132,7 @@ class LiftShaftSketch:
                 right_cb = lift.mra_right_bracket_width
                 available_w = lift.shaft_width - left_cb - right_cb
                 car_x = shaft_left + left_cb + (available_w - lift.unfinished_car_width) / 2
-                door_zone = 2 * lift.door_panel_thickness + lift.door_gap
+                door_zone = lift.door_zone_depth
                 if doors_face == "down":
                     car_y = base_y + wt + door_zone
                 else:
@@ -3106,7 +3143,7 @@ class LiftShaftSketch:
                 # MRL, or MRA + double_entrance: center car between brackets
                 cwb_width = lift.counterweight_bracket_width
                 cb_width = lift.car_bracket_width
-                door_zone = 2 * lift.door_panel_thickness + lift.door_gap
+                door_zone = lift.door_zone_depth
                 if not mirror:
                     available_w = lift.shaft_width - cwb_width - cb_width
                     car_x = shaft_left + cwb_width + (available_w - lift.unfinished_car_width) / 2
@@ -3473,7 +3510,7 @@ class LiftShaftSketch:
         first_shaft_left = x_offset + wt
 
         first_sw = shaft_widths[0]
-        first_door_zone = 2 * first_lift.door_panel_thickness + first_lift.door_gap
+        first_door_zone = first_lift.door_zone_depth
 
         # Car X: center car in available space between brackets (same as per-lift loop)
         if first_lift.mra_rear_cw:

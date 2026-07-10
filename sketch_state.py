@@ -190,6 +190,8 @@ def make_default_lift(lift_type: str = "passenger", machine_type: str = "mrl") -
         "door_height": 2100,
         "door_panel_length": panel_len,
         "door_panel_thickness": PANEL_THICKNESS_DEFAULT,
+        "car_door_thickness": PANEL_THICKNESS_DEFAULT,
+        "landing_door_thickness": PANEL_THICKNESS_DEFAULT,
         "structural_opening_width": 1300,
         "structural_opening_height": 2200,
         "door_opening_type": door_type,
@@ -400,6 +402,32 @@ def lift_door_gap(lift: dict):
     return g if g is not None else DOOR_GAP
 
 
+# Each lift door is two panels sharing one width but with independent
+# thicknesses: the car door (inner, touching the cabin) and the landing door
+# (outer, at the shaft wall). `door_panel_thickness` is the legacy single value,
+# used as the fallback for both when a split value is unset.
+def lift_car_door_thickness(lift: dict):
+    v = lift.get("car_door_thickness")
+    if v is not None:
+        return v
+    v = lift.get("door_panel_thickness")
+    return v if v is not None else PANEL_THICKNESS_DEFAULT
+
+
+def lift_landing_door_thickness(lift: dict):
+    v = lift.get("landing_door_thickness")
+    if v is not None:
+        return v
+    v = lift.get("door_panel_thickness")
+    return v if v is not None else PANEL_THICKNESS_DEFAULT
+
+
+def lift_door_zone(lift: dict):
+    """Depth from the shaft wall to the cabin = landing door + running clearance
+    + car door. Replaces the old `2 * door_panel_thickness + door_gap`."""
+    return lift_landing_door_thickness(lift) + lift_door_gap(lift) + lift_car_door_thickness(lift)
+
+
 def compute_min_shaft_width(lift: dict, machine_type: str) -> int:
     """Port of computeMinShaftWidth(). Zone = pure bracket + rail."""
     uc_w = lift["width"] + 2 * CAR_WALL_THICKNESS
@@ -419,9 +447,7 @@ def compute_min_shaft_width(lift: dict, machine_type: str) -> int:
 def compute_min_shaft_depth(lift: dict, machine_type: str) -> int:
     """Port of computeMinShaftDepth()."""
     uc_d = lift["depth"] + CAR_WALL_THICKNESS
-    thickness = lift.get("door_panel_thickness")
-    thickness = thickness if thickness is not None else PANEL_THICKNESS_DEFAULT
-    door_zone = 2 * thickness + lift_door_gap(lift)
+    door_zone = lift_door_zone(lift)
     if lift.get("double_entrance"):
         return int(door_zone + lift["depth"] + door_zone)
     if machine_type == "mra" and lift["type"] != "fire":
@@ -521,9 +547,7 @@ def _available_width(lift: dict):
 def _available_depth(lift: dict):
     """Spare depth for the rear CWT (MRA passenger only)."""
     uc_d = lift["depth"] + CAR_WALL_THICKNESS
-    thickness = lift.get("door_panel_thickness")
-    thickness = thickness if thickness is not None else PANEL_THICKNESS_DEFAULT
-    fixed = 2 * thickness + lift_door_gap(lift) + uc_d
+    fixed = lift_door_zone(lift) + uc_d
     wall_gap = lift.get("mra_cw_wall_gap")
     wall_gap = wall_gap if wall_gap is not None else MRA_CW_WALL_GAP_MIN
     return lift["shaft_depth"] - fixed - wall_gap
@@ -560,9 +584,7 @@ def apply_door_gap(lift: dict, mm) -> dict:
     """Running clearance; double-entrance lifts re-derive shaft depth from it."""
     clamped = max(0, mm)
     if lift.get("double_entrance"):
-        thickness = lift.get("door_panel_thickness")
-        thickness = thickness if thickness is not None else PANEL_THICKNESS_DEFAULT
-        door_zone = 2 * thickness + clamped
+        door_zone = lift_landing_door_thickness(lift) + lift_car_door_thickness(lift) + clamped
         return {**lift, "door_gap": clamped, "shaft_depth": door_zone + lift["depth"] + door_zone}
     return {**lift, "door_gap": clamped}
 
@@ -608,9 +630,7 @@ def apply_mra_cw_gap(lift: dict, mm) -> dict:
 def apply_mra_cw_wall_gap(lift: dict, mm) -> dict:
     clamped = max(0, mm)
     uc_d = lift["depth"] + CAR_WALL_THICKNESS
-    thickness = lift.get("door_panel_thickness")
-    thickness = thickness if thickness is not None else PANEL_THICKNESS_DEFAULT
-    fixed = 2 * thickness + lift_door_gap(lift) + uc_d
+    fixed = lift_door_zone(lift) + uc_d
     new_avail_d = lift["shaft_depth"] - fixed - clamped
     cw_d = lift.get("mra_cw_bracket_depth")
     cw_d = cw_d if cw_d is not None else MRA_CW_BRACKET_DEPTH_MIN
@@ -649,9 +669,7 @@ def apply_shaft_depth(lift: dict, new_sd, machine_type: str) -> dict:
     """Shaft depth change: redistribute into the rear CWT (MRA passenger only)."""
     if machine_type == "mra" and not lift.get("double_entrance") and lift["type"] != "fire":
         uc_d = lift["depth"] + CAR_WALL_THICKNESS
-        thickness = lift.get("door_panel_thickness")
-        thickness = thickness if thickness is not None else PANEL_THICKNESS_DEFAULT
-        fixed = 2 * thickness + lift_door_gap(lift) + uc_d
+        fixed = lift_door_zone(lift) + uc_d
         wall_gap = lift.get("mra_cw_wall_gap")
         wall_gap = wall_gap if wall_gap is not None else MRA_CW_WALL_GAP_MIN
         old_avail_d = lift["shaft_depth"] - fixed - wall_gap
@@ -708,9 +726,7 @@ def apply_fire_cabin(lift: dict, w, d, machine_type: str) -> dict:
         updates["mra_left_bracket"] = left
         updates["mra_right_bracket"] = new_avail - left
     if lift.get("double_entrance"):
-        thickness = lift.get("door_panel_thickness")
-        thickness = thickness if thickness is not None else PANEL_THICKNESS_DEFAULT
-        door_zone = 2 * thickness + lift_door_gap(lift)
+        door_zone = lift_door_zone(lift)
         updates["shaft_depth"] = door_zone + d + door_zone
     return {**lift, **updates}
 
@@ -760,21 +776,19 @@ def apply_double_entrance(lift: dict, on: bool, machine_type: str) -> dict:
     an MRL double-entrance lift. Only that MRA-passenger case changes the
     bracket model; for MRL (any type) and MRA fire the layout is already
     side-CW, so only the shaft depth re-derives."""
-    door_gap = lift_door_gap(lift)
-    thickness = lift.get("door_panel_thickness")
-    panel = thickness if thickness is not None else PANEL_THICKNESS_DEFAULT
     side_cw_now = lift_is_side_cw(lift, machine_type)
     side_cw_next = machine_type == "mrl" or lift["type"] == "fire" or on
+    # Door zone = landing door + running clearance + car door (both panels).
+    door_zone = lift_door_zone(lift)
 
     if side_cw_now == side_cw_next:
         # Bracket model unchanged — only depth re-derives (original behavior).
         if on:
-            door_zone = 2 * panel + door_gap
             return {**lift, "double_entrance": True,
                     "shaft_depth": door_zone + lift["depth"] + door_zone}
         uc_d = lift["depth"] + CAR_WALL_THICKNESS
         return {**lift, "double_entrance": False,
-                "shaft_depth": 2 * PANEL_THICKNESS_DEFAULT + door_gap + uc_d + REAR_CLEARANCE}
+                "shaft_depth": uc_d + door_zone + REAR_CLEARANCE}
 
     # Bracket model changes — reached only by an MRA passenger lift.
     rail_l, rail_r = lift_rails(lift)
@@ -786,7 +800,6 @@ def apply_double_entrance(lift: dict, on: bool, machine_type: str) -> dict:
         # rear-CW fields, and re-derive the through-car depth.
         shaft_w = MRL_CW_BRACKET_MIN + rail_l + uc_w + MRL_CAR_BRACKET_MIN + rail_r
         avail = shaft_w - uc_w - rail_l - rail_r
-        door_zone = 2 * panel + door_gap
         return {
             **lift,
             "double_entrance": True,
@@ -817,16 +830,27 @@ def apply_double_entrance(lift: dict, on: bool, machine_type: str) -> dict:
         "mra_cw_bracket_depth": MRA_CW_BRACKET_DEPTH_MIN,
         "mra_cw_gap": MRA_CW_GAP_MIN,
         "mra_cw_wall_gap": MRA_CW_WALL_GAP_MIN,
-        "shaft_depth": (2 * panel + door_gap + uc_d + MRA_CW_GAP_MIN
+        "shaft_depth": (door_zone + uc_d + MRA_CW_GAP_MIN
                         + MRA_CW_BRACKET_DEPTH_MIN + MRA_CW_WALL_GAP_MIN),
     }
 
 
-def apply_door_panel_thickness(lift: dict, mm) -> dict:
-    """Door panel thickness: double-entrance lifts re-derive shaft depth using
-    the lift's actual running clearance."""
-    if lift.get("double_entrance"):
-        door_zone = 2 * mm + lift_door_gap(lift)
-        return {**lift, "door_panel_thickness": mm,
-                "shaft_depth": door_zone + lift["depth"] + door_zone}
-    return {**lift, "door_panel_thickness": mm}
+def _with_thickness_depth(lift: dict) -> dict:
+    """Re-derive a double-entrance lift's shaft depth from its (updated) door
+    zone; leave non-double-entrance lifts' user-editable depth alone."""
+    if not lift.get("double_entrance"):
+        return lift
+    door_zone = lift_door_zone(lift)
+    return {**lift, "shaft_depth": door_zone + lift["depth"] + door_zone}
+
+
+def apply_car_door_thickness(lift: dict, mm) -> dict:
+    """Car door (inner, cabin side) thickness. Double-entrance lifts re-derive
+    shaft depth from the resulting door zone (both panels + running clearance)."""
+    return _with_thickness_depth({**lift, "car_door_thickness": mm})
+
+
+def apply_landing_door_thickness(lift: dict, mm) -> dict:
+    """Landing door (outer, shaft-wall side) thickness. Double-entrance lifts
+    re-derive shaft depth from the resulting door zone."""
+    return _with_thickness_depth({**lift, "landing_door_thickness": mm})
