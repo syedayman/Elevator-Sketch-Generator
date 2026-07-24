@@ -309,3 +309,6 @@ SECTION_FIGURE_HEIGHT = 14           # Figure height in inches (taller for secti
 
 # MRA (Machine Room Above) section specific
 DEFAULT_MACHINE_ROOM_HEIGHT = 3000   # MRA machine room height (mm)
+
+# Section hoisting beam callout (fixed value; no user input)
+HOISTING_BEAM_HEIGHT_LABEL = 200
