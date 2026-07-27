@@ -604,11 +604,15 @@ class LiftSectionSketch:
                     beam_center_y=bar_y + beam_height / 2,
                 )
 
-                # Machine - fill machine room space (aspect ratio preserved by draw_machine_image)
-                machine_width = sw * 0.9  #  (will be constrained by aspect ratio)
+                # Machine - draw at 70% of the available size while keeping its
+                # bottom edge anchored to the machine-room floor.
+                machine_scale = 0.7
+                machine_width = sw * 0.9 * machine_scale
                 machine_x_center = wt + sw / 2  # Centered in shaft
                 machine_y_bottom = overhead_top  # Bottom edge touches top of machine room floor slab
-                machine_height = bar_y - machine_y_bottom - 100
+                machine_height = (
+                    bar_y - machine_y_bottom - 100
+                ) * machine_scale
 
                 # If an unusually short machine room leaves no safe space,
                 # omit the image instead of allowing it to cross the beam.
