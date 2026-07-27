@@ -2377,6 +2377,7 @@ def draw_machine_image(
     height: float,
     machine_type: str = "mrl",
     assets_path: str = None,
+    display_scale_y: float = 1.0,
 ) -> bool:
     """
     Draw machine image at the specified position, preserving aspect ratio.
@@ -2393,6 +2394,9 @@ def draw_machine_image(
         height: Maximum height for the image (mm)
         machine_type: "mrl" or "mra" - determines which image file to load
         assets_path: Path to assets directory (defaults to module's assets folder)
+        display_scale_y: Ratio between horizontal and vertical display scales.
+            Use this when the axes use automatic aspect scaling so the image's
+            visual aspect ratio remains unchanged.
 
     Returns:
         True if image was drawn, False if image file not found
@@ -2425,17 +2429,19 @@ def draw_machine_image(
     img_height, img_width = img.shape[:2]
     img_aspect_ratio = img_width / img_height  # width / height
 
-    # Calculate scaled dimensions to fit within bounds while preserving aspect ratio
-    target_aspect_ratio = width / height
+    if width <= 0 or height <= 0 or display_scale_y <= 0:
+        return False
 
-    if img_aspect_ratio > target_aspect_ratio:
-        # Image is wider than target - constrain by width
+    # Fit the image inside the available bounds. The y correction accounts for
+    # unequal x/y plot scaling so the image is not visually stretched.
+    height_at_full_width = width * display_scale_y / img_aspect_ratio
+
+    if height_at_full_width <= height:
         scaled_width = width
-        scaled_height = width / img_aspect_ratio
+        scaled_height = height_at_full_width
     else:
-        # Image is taller than target - constrain by height
         scaled_height = height
-        scaled_width = height * img_aspect_ratio
+        scaled_width = height * img_aspect_ratio / display_scale_y
 
     # Calculate extent (position in data coordinates), centered
     x_left = x_center - scaled_width / 2

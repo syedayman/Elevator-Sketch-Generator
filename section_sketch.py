@@ -161,6 +161,10 @@ class LiftSectionSketch:
         # Total width including walls
         self.total_width = self.shaft_depth + 2 * self.wall_thickness
 
+        # Add a small display-only gap so the wall between adjacent visible
+        # landing openings does not look cramped in the compressed section.
+        self.display_floor_height = self.floor_height + 500
+
         # Vertical geometry
         # Ground floor level is at y=0 in the drawing (top of pit slab)
         self.ground_floor_y = 0
@@ -173,16 +177,17 @@ class LiftSectionSketch:
         # clear gap above the Floor 1 opening before the break symbol.
         floor_1_opening_top = (
             self.pit_depth
-            + self.floor_height
+            + self.display_floor_height
             + self.structural_opening_height
         )
         self.ground_zone_height = max(4000, floor_1_opening_top + 500)
-        # Keep Floor n-1 safely above the break even when headroom exceeds the
-        # original fixed 5m top zone.
-        top_landing_gap_above_break = 800
-        self.top_zone_height = max(
-            5000,
-            self.overhead_clearance + top_landing_gap_above_break,
+        # The upper zone shows Floor n-1 above the break and the Top Floor one
+        # configured floor height above it.
+        self.top_landing_gap_above_break = 800
+        self.top_zone_height = (
+            self.top_landing_gap_above_break
+            + self.display_floor_height
+            + self.overhead_clearance
         )
         self.break_zone_height = 1500  # Height for break line area
 
@@ -330,8 +335,16 @@ class LiftSectionSketch:
 
     def _create_figure(self) -> tuple:
         """Create matplotlib figure and axes for section view."""
+        # Keep the default section's vertical drawing scale, but let sections
+        # with more visible content grow taller instead of compressing every
+        # floor and annotation into the same fixed-height canvas.
+        reference_drawing_height = 18_000
+        figure_height = config.SECTION_FIGURE_HEIGHT * max(
+            1.0,
+            self.drawing_height / reference_drawing_height,
+        )
         fig, ax = plt.subplots(
-            figsize=(config.SECTION_FIGURE_WIDTH, config.SECTION_FIGURE_HEIGHT)
+            figsize=(config.SECTION_FIGURE_WIDTH, figure_height)
         )
         ax.set_aspect("equal")
         ax.axis("off")
@@ -355,9 +368,11 @@ class LiftSectionSketch:
         ground_level = 0
         break_line_bottom = self.ground_zone_height
         break_line_top = break_line_bottom + self.break_zone_height
-        top_zone_bottom = break_line_top
-        top_level = break_line_top + (self.top_zone_height - self.overhead_clearance)
-        overhead_top = break_line_top + self.top_zone_height
+        floor_n_minus_1_level = (
+            break_line_top + self.top_landing_gap_above_break
+        )
+        top_level = floor_n_minus_1_level + self.display_floor_height
+        overhead_top = top_level + self.overhead_clearance
 
         # For MRA, calculate machine room top.
         if self.machine_type == "mra":
@@ -390,17 +405,18 @@ class LiftSectionSketch:
 
         # Floor slab positions (needed for structural openings)
         ground_floor_slab_y = ground_level + self.pit_depth
-        floor_1_level = ground_floor_slab_y + self.floor_height
+        floor_1_level = ground_floor_slab_y + self.display_floor_height
 
         # Skip shaft interior background - keep it white
 
         # Draw pit area (pit slab is drawn as the bottom wall below)
 
         # Draw side walls (left and right)
-        # Left wall - segmented around the three visible landing openings
+        # Left wall - segmented around the four visible landing openings
         opening_height = self.structural_opening_height
         ground_opening_top = ground_floor_slab_y + opening_height
         floor_1_opening_top = floor_1_level + opening_height
+        floor_n_minus_1_opening_top = floor_n_minus_1_level + opening_height
         top_opening_top = top_level + opening_height
 
         # Segment 1: From pit bottom to ground floor slab (below ground opening)
@@ -415,13 +431,21 @@ class LiftSectionSketch:
             display_options["show_hatching"]
         )
 
-        # Segment 3: From above Floor 1 to the Floor n-1 opening (spans break zone)
+        # Segment 3: From above Floor 1 to Floor n-1 (spans break zone)
         draw_wall_section(
-            ax, 0, floor_1_opening_top, wt, top_level - floor_1_opening_top,
+            ax, 0, floor_1_opening_top, wt,
+            floor_n_minus_1_level - floor_1_opening_top,
             display_options["show_hatching"]
         )
 
-        # Segment 4: From above Floor n-1 opening to overhead top
+        # Segment 4: Between the Floor n-1 and Top Floor openings
+        draw_wall_section(
+            ax, 0, floor_n_minus_1_opening_top, wt,
+            top_level - floor_n_minus_1_opening_top,
+            display_options["show_hatching"]
+        )
+
+        # Segment 5: From above the Top Floor opening to overhead top
         draw_wall_section(
             ax, 0, top_opening_top, wt, overhead_top - top_opening_top,
             display_options["show_hatching"]
@@ -453,6 +477,16 @@ class LiftSectionSketch:
         ))
 
         # Floor n-1 landing door
+        ax.add_patch(Rectangle(
+            (wt, floor_n_minus_1_level - door_rect_extend),
+            door_rect_width, door_rect_height,
+            facecolor='white',
+            edgecolor=config.WALL_EDGE_COLOR,
+            linewidth=config.WALL_EDGE_WIDTH,
+            zorder=3,
+        ))
+
+        # Top Floor landing door
         ax.add_patch(Rectangle(
             (wt, top_level - door_rect_extend),
             door_rect_width, door_rect_height,
@@ -527,6 +561,15 @@ class LiftSectionSketch:
 
         # 4. Floor n-1 level (above break lines)
         draw_floor_slab_protrusion(
+            ax, wt, wt + sw, floor_n_minus_1_level,
+            protrusion_depth=protrusion_depth,
+            slab_thickness=slab_thickness,
+            wall_thickness=wt,
+            show_hatching=display_options["show_hatching"],
+        )
+
+        # 5. Top Floor level
+        draw_floor_slab_protrusion(
             ax, wt, wt + sw, top_level,
             protrusion_depth=protrusion_depth,
             slab_thickness=slab_thickness,
@@ -543,7 +586,7 @@ class LiftSectionSketch:
                 mrh = self.machine_room_height
 
                 # Hoisting beam (visual thickness remains proportional)
-                beam_height = mrh * 0.02
+                beam_height = mrh * 0.025
                 bar_y = machine_room_top - slab_thickness - beam_height - 100  # Fixed 100mm gap from ceiling
 
                 ax.add_patch(Rectangle(
@@ -563,18 +606,22 @@ class LiftSectionSketch:
 
                 # Machine - fill machine room space (aspect ratio preserved by draw_machine_image)
                 machine_width = sw * 0.9  #  (will be constrained by aspect ratio)
-                machine_height = mrh * 0.9  #  (will be constrained by aspect ratio)
                 machine_x_center = wt + sw / 2  # Centered in shaft
                 machine_y_bottom = overhead_top  # Bottom edge touches top of machine room floor slab
+                machine_height = bar_y - machine_y_bottom - 100
 
-                draw_machine_image(
-                    ax,
-                    x_center=machine_x_center,
-                    y_bottom=machine_y_bottom,
-                    width=machine_width,
-                    height=machine_height,
-                    machine_type="mra",
-                )
+                # If an unusually short machine room leaves no safe space,
+                # omit the image instead of allowing it to cross the beam.
+                if machine_height > 0:
+                    draw_machine_image(
+                        ax,
+                        x_center=machine_x_center,
+                        y_bottom=machine_y_bottom,
+                        width=machine_width,
+                        height=machine_height,
+                        machine_type="mra",
+                        display_scale_y=render_scale_y,
+                    )
 
             elif self.machine_type == "mrl":
                 # MRL: Draw machine in overhead area (existing behavior)
@@ -582,7 +629,7 @@ class LiftSectionSketch:
                 ohc = self.overhead_clearance
 
                 # Hoisting beam (visual thickness remains proportional)
-                beam_height = ohc * 0.007
+                beam_height = ohc * 0.015
                 bar_y = overhead_top - slab_thickness - beam_height - 100  # Fixed 100mm gap from ceiling
 
                 ax.add_patch(Rectangle(
@@ -691,6 +738,7 @@ class LiftSectionSketch:
                 ground_floor_slab_y,
                 floor_1_level,
                 machine_room_top,
+                floor_n_minus_1_level=floor_n_minus_1_level,
                 rendered_slab_thickness=slab_thickness,
             )
 
@@ -746,6 +794,7 @@ class LiftSectionSketch:
         ground_floor_slab_y: float = None,
         floor_1_level: float = None,
         machine_room_top: float = None,
+        floor_n_minus_1_level: float = None,
         rendered_slab_thickness: float = None,
     ) -> None:
         """Draw dimension annotations for section view."""
@@ -762,7 +811,10 @@ class LiftSectionSketch:
             ground_floor_slab_y = ground_level + 1200
 
         if floor_1_level is None:
-            floor_1_level = ground_floor_slab_y + self.floor_height
+            floor_1_level = ground_floor_slab_y + self.display_floor_height
+
+        if floor_n_minus_1_level is None:
+            floor_n_minus_1_level = top_level - self.display_floor_height
 
         # Default machine_room_top to overhead_top for MRL
         if machine_room_top is None:
@@ -779,45 +831,60 @@ class LiftSectionSketch:
             orientation="horizontal",
         )
 
-        # Vertical dimensions on left side (four stacked dimensions)
-        # 1. Pit Slab (bottom slab thickness - from pit bottom to ground level)
-        draw_dimension_line(
-            ax,
-            start=(0, pit_bottom),
-            end=(0, ground_level),
-            text=f"Pit Slab {int(self.pit_slab)}",
-            offset=-1300,
-            orientation="vertical",
+        # Pit slab callout, aligned with the AC duct and hoisting beam labels.
+        wall_outer_x = wt + sw + wt
+        label_x = wall_outer_x + 600
+        pit_slab_center_y = (pit_bottom + ground_level) / 2
+        ax.add_patch(FancyArrowPatch(
+            (label_x - 50, pit_slab_center_y),
+            (wall_outer_x + 20, pit_slab_center_y),
+            arrowstyle="->",
+            mutation_scale=15,
+            color="black",
+            linewidth=1.0,
+            zorder=10,
+        ))
+        ax.text(
+            label_x,
+            pit_slab_center_y,
+            f"Pit Slab {int(self.pit_slab)} mm",
+            fontsize=config.DIMENSION_TEXT_SIZE,
+            ha="left",
+            va="center",
         )
 
-        # 2. Pit Depth (from ground level to ground floor slab top)
+        # Keep the overall vertical dimensions clear of the landing labels.
+        overall_dimension_offset = -1200
+
+        # Vertical dimensions on left side
+        # Pit Depth (from ground level to ground floor slab top)
         draw_dimension_line(
             ax,
             start=(0, ground_level),
             end=(0, ground_floor_slab_y),
             text=f"Pit Depth {int(ground_floor_slab_y - ground_level)}",
-            offset=-1000,
+            offset=overall_dimension_offset,
             orientation="vertical",
         )
 
-        # 3. Travel (from ground floor slab top to top floor slab top)
+        # Travel (from ground floor slab top to top floor slab top)
         # Use actual travel_height from config (visual positions are compressed by break lines)
         draw_dimension_line(
             ax,
             start=(0, ground_floor_slab_y),
             end=(0, top_level),
             text=f"Travel {int(self.travel_height)}",
-            offset=-1000,
+            offset=overall_dimension_offset,
             orientation="vertical",
         )
 
-        # 4. Headroom (from top floor slab top to inner edge of top wall)
+        # Headroom (from top floor slab top to inner edge of top wall)
         draw_dimension_line(
             ax,
             start=(0, top_level),
             end=(0, overhead_top - slab_thickness),
             text=f"Headroom {int(self.overhead_clearance)}",
-            offset=-1000,
+            offset=overall_dimension_offset,
             orientation="vertical",
         )
 
@@ -831,12 +898,12 @@ class LiftSectionSketch:
             orientation="horizontal",
         )
 
-        # Place floor labels inside the shaft to keep the dimension side clear.
-        floor_label_x = wt + 150
+        # Place landing labels just beyond the outer end of the left slab.
+        floor_label_x = -450
         ax.text(
             floor_label_x, ground_floor_slab_y - slab_thickness - 100,
             "Bottom-most\nLanding FFL",
-            ha="left", va="top",
+            ha="right", va="top",
             fontsize=config.DIMENSION_TEXT_SIZE,
             color=config.DIMENSION_COLOR,
         )
@@ -844,15 +911,23 @@ class LiftSectionSketch:
         ax.text(
             floor_label_x, floor_1_level - slab_thickness - 100,
             "Floor 1 F.F.L.",
-            ha="left", va="top",
+            ha="right", va="top",
+            fontsize=config.DIMENSION_TEXT_SIZE,
+            color=config.DIMENSION_COLOR,
+        )
+
+        ax.text(
+            floor_label_x, floor_n_minus_1_level - slab_thickness - 100,
+            "Floor n-1 F.F.L.",
+            ha="right", va="top",
             fontsize=config.DIMENSION_TEXT_SIZE,
             color=config.DIMENSION_COLOR,
         )
 
         ax.text(
             floor_label_x, top_level - slab_thickness - 100,
-            "Floor n-1 F.F.L.",
-            ha="left", va="top",
+            "Top Floor F.F.L.",
+            ha="right", va="top",
             fontsize=config.DIMENSION_TEXT_SIZE,
             color=config.DIMENSION_COLOR,
         )
@@ -866,7 +941,7 @@ class LiftSectionSketch:
             ax,
             start=(0, ground_floor_slab_y),
             end=(0, ground_floor_slab_y + opening_height),
-            text=f"Structural Opening {int(opening_height)}",
+            text=f"Struct. Opening {int(opening_height)}",
             offset=-300,
             orientation="vertical",
         )
@@ -886,7 +961,7 @@ class LiftSectionSketch:
             ax,
             start=(0, floor_1_level),
             end=(0, floor_1_level + opening_height),
-            text=f"Structural Opening {int(opening_height)}",
+            text=f"Struct. Opening {int(opening_height)}",
             offset=-300,
             orientation="vertical",
         )
@@ -904,14 +979,34 @@ class LiftSectionSketch:
         # Floor n-1 - Structural Opening (further left)
         draw_dimension_line(
             ax,
-            start=(0, top_level),
-            end=(0, top_level + opening_height),
-            text=f"Structural Opening {int(opening_height)}",
+            start=(0, floor_n_minus_1_level),
+            end=(0, floor_n_minus_1_level + opening_height),
+            text=f"Struct. Opening {int(opening_height)}",
             offset=-300,
             orientation="vertical",
         )
 
         # Floor n-1 - Door Opening (closer to wall)
+        draw_dimension_line(
+            ax,
+            start=(0, floor_n_minus_1_level),
+            end=(0, floor_n_minus_1_level + door_height),
+            text=f"Door Opening {int(door_height)}",
+            offset=-50,
+            orientation="vertical",
+        )
+
+        # Top Floor - Structural Opening (further left)
+        draw_dimension_line(
+            ax,
+            start=(0, top_level),
+            end=(0, top_level + opening_height),
+            text=f"Struct. Opening {int(opening_height)}",
+            offset=-300,
+            orientation="vertical",
+        )
+
+        # Top Floor - Door Opening (closer to wall)
         draw_dimension_line(
             ax,
             start=(0, top_level),
@@ -928,6 +1023,6 @@ class LiftSectionSketch:
                 start=(0, overhead_top),
                 end=(0, machine_room_top - slab_thickness),
                 text=f"Machine Room {int(self.machine_room_height)}",
-                offset=-1000,
+                offset=overall_dimension_offset,
                 orientation="vertical",
             )

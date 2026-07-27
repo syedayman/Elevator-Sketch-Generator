@@ -21,6 +21,7 @@ import streamlit as st
 
 import debbie_agent
 import debbie_operations as dops
+import saved_configs as saved
 import sketch_state as ss
 from section_sketch import LiftSectionSketch, SectionConfig
 from shaft_sketch import LiftConfig, LiftShaftSketch, FIRE_LIFT_CABIN_SIZES
@@ -328,10 +329,10 @@ section[data-testid="stSidebar"] [data-testid="stDivider"] {
 .stApp [data-testid="stNumberInput"] button:hover {
     background: rgba(99, 102, 241, 0.25) !important;
 }
-/* Hide Streamlit's "Press Enter to …" input hints — they overlay the
-   placeholder/value in narrow columns instead of sitting beside it. */
-.stApp [data-testid="InputInstructions"],
-.stApp [class*="InputInstructions"] {
+/* Hide Streamlit's input hint/counter everywhere, including portal-based
+   popovers that render outside .stApp. */
+[data-testid="InputInstructions"],
+[class*="InputInstructions"] {
     display: none !important;
 }
 /* Chat input (Debbie) — match the other dark inputs. Paint ONE surface (the
@@ -524,6 +525,14 @@ def init_state() -> None:
     stt.setdefault("debbie_pending", None)
     stt.setdefault("debbie_hits", [])
     stt.setdefault("_autogen_rev", None)
+    stt.setdefault("_preview_revs", {"plan": None, "section": None})
+    stt["_preview_revs"].setdefault("plan", None)
+    stt["_preview_revs"].setdefault("section", None)
+    stt.setdefault("_last_preview_view", None)
+    stt.setdefault("_force_preview_generation", False)
+    stt.setdefault("saved_config_name_input", "Sketch Configuration")
+    stt.setdefault("saved_config_notice", None)
+    stt.setdefault("saved_config_import_nonce", 0)
 
 
 def bump_rev() -> None:
@@ -876,6 +885,7 @@ def render_lift_form(ci: int, bank: str, idx: int, machine_type: str,
             st.session_state["ui_section_source"] = f"c{ci}-b{'1' if bank == 'bank1' else '2'}-{idx}"
             st.session_state["ui_active_view"] = "section"
             st.session_state["section_image"] = None
+            generate_section()
 
         st.button("Copy to Section", key=_wk(f"{prefix}_copy_sec"),
                   on_click=_cb_copy_to_section)
@@ -1396,6 +1406,24 @@ def _render_plan_png(cfg: dict, ci: int, lift_filter: str = "all") -> bytes:
     )
 
 
+def _mark_preview_generated(view: str) -> None:
+    """Record which config revision was last rendered for a preview."""
+    stt = st.session_state
+    stt["_preview_revs"][view] = stt["rev"]
+    stt["_autogen_rev"] = stt["rev"]
+
+
+def _invalidate_preview_cache() -> None:
+    """Clear both previews so the active view renders and the other stays lazy."""
+    stt = st.session_state
+    stt["plan_image"] = None
+    stt["section_image"] = None
+    stt["plan_error"] = None
+    stt["section_error"] = None
+    stt["_preview_revs"] = {"plan": None, "section": None}
+    stt["_autogen_rev"] = None
+
+
 def generate_plan(plan_filter: str = None) -> None:
     """Generate the active core's plan PNG into session state. Port of the
     web handleGenerate (plan branch)."""
@@ -1408,6 +1436,7 @@ def generate_plan(plan_filter: str = None) -> None:
     if blank:
         st.session_state["plan_error"] = blank
         st.session_state["plan_image"] = None
+        _mark_preview_generated("plan")
         return
 
     # Only filter when the split option + a mixed core make it meaningful.
@@ -1422,7 +1451,7 @@ def generate_plan(plan_filter: str = None) -> None:
     except Exception as e:  # noqa: BLE001 — surface unexpected errors in the UI
         st.session_state["plan_error"] = f"Unexpected error: {e}"
         st.session_state["plan_image"] = None
-    st.session_state["_autogen_rev"] = st.session_state["rev"]
+    _mark_preview_generated("plan")
 
 
 def _render_section_png(cfg: dict) -> bytes:
@@ -1480,6 +1509,7 @@ def generate_section() -> None:
         st.session_state["section_error"] = (
             "Some input cells are empty. Fill in all fields before generating.")
         st.session_state["section_image"] = None
+        _mark_preview_generated("section")
         return
 
     try:
@@ -1491,7 +1521,7 @@ def generate_section() -> None:
     except Exception as e:  # noqa: BLE001
         st.session_state["section_error"] = f"Unexpected error: {e}"
         st.session_state["section_image"] = None
-    st.session_state["_autogen_rev"] = st.session_state["rev"]
+    _mark_preview_generated("section")
 
 
 def regenerate_active_view() -> None:
@@ -1558,7 +1588,7 @@ def debbie_send(text: str) -> None:
         new_cfg, op_results = dops.apply_operations(cfg, operations, active_core=ci)
         applied = [r for r in op_results if r["status"] == "applied"]
         rejected = [r for r in op_results if r["status"] == "rejected"]
-        warnings = "\n".join(f"⚠️ {r['detail']}" for r in rejected)
+        warnings = "\n".join(f"- {r['detail']}" for r in rejected)
 
         if applied:
             # Something changed — apply it (undoable, shared history with the
@@ -1581,7 +1611,7 @@ def debbie_send(text: str) -> None:
 
 def render_debbie_panel() -> None:
     """Debbie chat UI (chat clears on reload — ephemeral by design)."""
-    with st.expander("✨ Debbie — AI sketch assistant", expanded=False):
+    with st.expander("Debbie — AI sketch assistant", expanded=False):
         if not debbie_agent.is_configured():
             st.info("Debbie needs an OpenAI key. Set OPENAI_API_KEY in "
                     ".streamlit/secrets.toml (or the environment) to enable her.")
@@ -1831,6 +1861,18 @@ html, body, .stApp, .stApp [data-testid="stAppViewContainer"] {
 .stApp [data-testid="stTextInput"] [aria-live="polite"] {
     display: none !important;
 }
+[data-testid="stPopoverBody"] [data-testid="stTextInput"] input {
+    background: rgba(2, 6, 23, 0.62) !important;
+    border: 1px solid rgba(255, 255, 255, 0.12) !important;
+    border-radius: 0.6rem !important;
+    color: #f8fafc !important;
+    min-height: 2.5rem !important;
+    padding: 0.55rem 0.75rem !important;
+}
+[data-testid="stPopoverBody"] [data-testid="stTextInput"] input:focus {
+    border-color: rgba(129, 140, 248, 0.48) !important;
+    box-shadow: none !important;
+}
 .stApp [data-testid="stTextInput"] button {
     margin-right: 0.35rem !important;
 }
@@ -1888,6 +1930,160 @@ html, body, .stApp, .stApp [data-testid="stAppViewContainer"] {
 # 10% slider step and taken as the min across MRL/MRA. The slider's max_value is
 # set from this so over-scaling that overlaps labels is simply not selectable —
 # no caption needed; the control's range is the limit.
+
+
+# =============================================================================
+# Saved configuration files
+# =============================================================================
+
+def _set_saved_notice(kind: str, message: str) -> None:
+    st.session_state["saved_config_notice"] = (kind, message)
+
+
+def _capture_saved_view_state() -> dict:
+    return saved.make_view_state(
+        active_core=_active_core_index(),
+        plan_variant=st.session_state.get("ui_plan_variant", "all"),
+        section_source=st.session_state.get("ui_section_source", "c0-b1-0"),
+    )
+
+
+def _open_saved_config(upload_key: str) -> None:
+    uploaded = st.session_state.get(upload_key)
+    if uploaded is None:
+        _set_saved_notice("error", "Choose a configuration file.")
+        return
+    try:
+        payload = saved.parse_payload(uploaded.getvalue())
+    except saved.SavedConfigError as exc:
+        _set_saved_notice("error", str(exc))
+        return
+
+    _load_saved_payload(payload)
+    st.session_state["saved_config_import_nonce"] += 1
+    _set_saved_notice("success", f'Opened "{payload["metadata"]["name"]}".')
+
+
+def _section_source_keys(config: dict) -> list[str]:
+    keys = []
+    for core_index, core in enumerate(config["cores"]):
+        for bank_number, lifts in (
+            ("1", core["bank1_lifts"]),
+            ("2", core["bank2_lifts"]),
+        ):
+            keys.extend(
+                f"c{core_index}-b{bank_number}-{lift_index}"
+                for lift_index in range(len(lifts))
+            )
+    return keys
+
+
+def _normalized_saved_plan_variant(config: dict, active_core: int, value: str) -> str:
+    if value not in PLAN_VARIANTS or not config.get("split_lift_types"):
+        return "all"
+    core = config["cores"][active_core]
+    lifts = list(core["bank1_lifts"])
+    if core["arrangement"] == "Facing":
+        lifts.extend(core["bank2_lifts"])
+    types = {lift["type"] for lift in lifts}
+    return value if {"passenger", "fire"} <= types else "all"
+
+
+def _load_saved_payload(payload: dict) -> None:
+    """Replace the current sketch with an already validated saved payload."""
+    config = payload["config"]
+    view_state = payload["view_state"]
+    active_core = max(0, min(view_state["active_core"], len(config["cores"]) - 1))
+    source_keys = _section_source_keys(config)
+    section_source = view_state["section_source"]
+    if section_source not in source_keys:
+        section_source = source_keys[0]
+
+    # Whole-config replacement is intentional: linked lift values, separators,
+    # dormant machine fields and the section snapshot must remain exact.
+    set_config(config)
+    stt = st.session_state
+    stt["ui_active_core"] = active_core
+    stt["ui_plan_variant"] = _normalized_saved_plan_variant(
+        config, active_core, view_state["plan_variant"]
+    )
+    stt["ui_section_source"] = section_source
+    _invalidate_preview_cache()
+    stt["debbie_msgs"] = []
+    stt["debbie_pending"] = None
+    stt["_force_preview_generation"] = True
+
+
+def _render_saved_configurations() -> None:
+    """Render a compact, file-style Save/Open toolbar beside the app title."""
+    title_col, save_col, open_col = st.columns(
+        [8, 1.15, 1.15],
+        vertical_alignment="center",
+    )
+
+    with title_col:
+        st.html('<h1 class="main-brand-title">Drawing Debbie</h1>')
+
+    with save_col:
+        with st.popover("Save", use_container_width=True):
+            name = st.text_input(
+                "Name",
+                key="saved_config_name_input",
+                max_chars=saved.MAX_NAME_LENGTH,
+            )
+            payload = None
+            save_error = None
+            try:
+                payload = saved.build_payload(
+                    name,
+                    st.session_state["config"],
+                    _capture_saved_view_state(),
+                )
+            except saved.SavedConfigError as exc:
+                save_error = str(exc)
+
+            if save_error and name.strip():
+                st.error(save_error)
+
+            st.download_button(
+                "Save file",
+                data=saved.payload_to_bytes(payload) if payload else b"",
+                file_name=(
+                    saved.filename_for_name(payload["metadata"]["name"])
+                    if payload
+                    else "sketch-configuration.debbie.json"
+                ),
+                mime="application/json",
+                width="stretch",
+                disabled=payload is None,
+            )
+
+    with open_col:
+        with st.popover("Open", use_container_width=True):
+            upload_key = (
+                f"saved_config_import_"
+                f"{st.session_state['saved_config_import_nonce']}"
+            )
+            st.file_uploader(
+                "Configuration file",
+                type=["json"],
+                key=upload_key,
+                max_upload_size=1,
+                label_visibility="collapsed",
+            )
+            st.button(
+                "Open file",
+                key=f"{upload_key}_button",
+                width="stretch",
+                disabled=st.session_state.get(upload_key) is None,
+                on_click=_open_saved_config,
+                args=(upload_key,),
+            )
+
+    notice = st.session_state.pop("saved_config_notice", None)
+    if notice:
+        _, message = notice
+        st.toast(message)
 
 
 # =============================================================================
@@ -1954,8 +2150,10 @@ def _restore_defaults() -> None:
     """Reset the whole config to defaults (undoable) — port of handleRestoreDefaults."""
     set_config(ss.make_default_config())
     st.session_state["ui_active_core"] = 0
-    st.session_state["plan_error"] = None
-    st.session_state["section_error"] = None
+    st.session_state["ui_plan_variant"] = "all"
+    st.session_state["ui_section_source"] = "c0-b1-0"
+    _invalidate_preview_cache()
+    regenerate_active_view()
 
 
 def _undo_clicked() -> None:
@@ -1991,7 +2189,7 @@ def _undo_redo_row() -> None:
 def main():
     st.set_page_config(
         page_title="Drawing Debbie",
-        page_icon=str(BRAND_IMAGE_PATH) if BRAND_IMAGE_PATH.exists() else "🏗️",
+        page_icon=str(BRAND_IMAGE_PATH) if BRAND_IMAGE_PATH.exists() else None,
         layout="wide",
         initial_sidebar_state="expanded",
     )
@@ -2004,7 +2202,7 @@ def main():
     init_state()
     cleanup_old_widget_keys()
 
-    st.html('<h1 class="main-brand-title">Drawing Debbie</h1>')
+    _render_saved_configurations()
 
     cfg = st.session_state["config"]
     st.session_state["ui_active_core"] = _active_core_index()  # clamp after core removals
@@ -2067,6 +2265,8 @@ def main():
                       "bank2_lifts": [rb(lf) for lf in core["bank2_lifts"]]}
                      for core in c["cores"]]
             set_config({**c, "machine_type": mt, "cores": cores})
+            _invalidate_preview_cache()
+            regenerate_active_view()
 
         st.radio(
             "Machine Type", options=["mrl", "mra"],
@@ -2093,6 +2293,7 @@ def main():
                     return  # stale event from a previous widget revision
                 st.session_state["ui_active_core"] = st.session_state[ckey]
                 bump_rev()
+                generate_plan()
 
             st.radio(
                 "Active Core", options=list(range(len(cfg["cores"]))),
@@ -2108,6 +2309,7 @@ def main():
                          ss.make_default_core(c["machine_type"], f"Core {len(c['cores']) + 1}")]
                 set_config(ss.fill_blank_lift_ids({**c, "cores": cores}))
                 st.session_state["ui_active_core"] = len(cores) - 1
+                generate_plan()
 
             def _cb_remove_core():
                 c = st.session_state["config"]
@@ -2118,6 +2320,7 @@ def main():
                 cores = [{**x, "name": f"Core {j + 1}"} for j, x in enumerate(remaining)]
                 set_config(ss.fill_blank_lift_ids({**c, "cores": cores}))
                 st.session_state["ui_active_core"] = max(0, min(rm, len(cores) - 1))
+                generate_plan()
 
             ac1, ac2 = st.columns(2)
             with ac1:
@@ -2227,7 +2430,7 @@ def main():
         # Auto-generate: re-render the active view's preview after every edit
         # (manual, Debbie, undo/redo). UI preference — not part of the config.
         st.checkbox(
-            "Auto-generate preview", key="auto_generate",
+            "Auto-generate after edits", key="auto_generate",
             help="Re-render the preview automatically after every change "
                  "(adds ~1s per edit on large sketches).",
         )
@@ -2247,9 +2450,18 @@ def main():
     machine_type = cfg["machine_type"]
     active_view = st.session_state["ui_active_view"]
 
-    # Auto-generate: re-render once per config revision. The generate functions
-    # stamp _autogen_rev, so paths that already rendered (Debbie, undo/redo,
-    # the Generate button, the carousel) are not rendered twice.
+    # Render the active view when the app first opens, when entering a stale
+    # view, and after loading a configuration. The other view remains lazy.
+    stt = st.session_state
+    view_changed = stt["_last_preview_view"] != active_view
+    preview_is_stale = stt["_preview_revs"][active_view] != stt["rev"]
+    force_preview = stt.pop("_force_preview_generation", False)
+    if force_preview or (view_changed and preview_is_stale):
+        regenerate_active_view()
+    stt["_last_preview_view"] = active_view
+
+    # The opt-in checkbox still re-renders after every config edit. Generation
+    # stamps _autogen_rev so direct event renders are not repeated here.
     if (st.session_state.get("auto_generate")
             and st.session_state["_autogen_rev"] != st.session_state["rev"]):
         regenerate_active_view()
@@ -2453,6 +2665,7 @@ def main():
                 set_config({**c, "section": ss.copy_lift_values_to_section(
                     c["section"], lifts[i], acore["wall_thickness_mm"])})
                 st.session_state["section_image"] = None
+                generate_section()
 
             st.selectbox("Section Lift", options=options,
                          format_func=lambda k: labels.get(k, k),
