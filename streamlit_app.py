@@ -4,7 +4,8 @@ Streamlit web app for generating lift shaft plan and section sketches.
 Feature parity with the KARR AI standalone sketch generator (apps/web
 dashboard/sketches): single-config state model, multi-core plans, lift IDs +
 brief-spec table, split passenger/fire plan carousel, whole-sketch undo/redo,
-and the Debbie AI editing assistant. See sketch_state.py (config + reducers),
+the Debbie AI editing assistant, and Supabase-backed saved sketches. See
+sketch_state.py (config + reducers),
 debbie_operations.py (operation interpreter) and debbie_agent.py (OpenAI call).
 """
 
@@ -21,7 +22,8 @@ import streamlit as st
 
 import debbie_agent
 import debbie_operations as dops
-import saved_configs as saved
+import saved_sketch_store as saved_store
+import saved_sketches as saved
 import sketch_state as ss
 from section_sketch import LiftSectionSketch, SectionConfig
 from shaft_sketch import LiftConfig, LiftShaftSketch, FIRE_LIFT_CABIN_SIZES
@@ -530,9 +532,12 @@ def init_state() -> None:
     stt["_preview_revs"].setdefault("section", None)
     stt.setdefault("_last_preview_view", None)
     stt.setdefault("_force_preview_generation", False)
-    stt.setdefault("saved_config_name_input", "Sketch Configuration")
-    stt.setdefault("saved_config_notice", None)
-    stt.setdefault("saved_config_import_nonce", 0)
+    stt.setdefault("saved_sketch_name_input", "Untitled Sketch")
+    stt.setdefault("active_saved_sketch_id", None)
+    stt.setdefault("active_saved_sketch_updated_at", None)
+    stt.setdefault("saved_sketch_items", [])
+    stt.setdefault("saved_sketch_list_loaded", False)
+    stt.setdefault("saved_sketch_notice", None)
 
 
 def bump_rev() -> None:
@@ -1933,11 +1938,52 @@ html, body, .stApp, .stApp [data-testid="stAppViewContainer"] {
 
 
 # =============================================================================
-# Saved configuration files
+# Supabase saved sketches
 # =============================================================================
 
+def _saved_setting(name: str) -> str | None:
+    """Read one server-side setting from Streamlit secrets or the environment."""
+    try:
+        if name in st.secrets:
+            value = st.secrets[name]
+            return str(value).strip() if value is not None else None
+    except Exception:
+        pass
+    value = os.environ.get(name)
+    return value.strip() if value else None
+
+
+@st.cache_resource(show_spinner=False)
+def _cached_saved_sketch_store(
+    url: str,
+    service_role_key: str,
+    user_id: str,
+) -> saved_store.SavedSketchStore:
+    return saved_store.create_store(url, service_role_key, user_id)
+
+
+def _get_saved_sketch_store(
+) -> tuple[saved_store.SavedSketchStore | None, str | None]:
+    names = ("SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "GATE_USER_ID")
+    values = {name: _saved_setting(name) for name in names}
+    missing = [name for name, value in values.items() if not value]
+    if missing:
+        return None, f"Saving is not configured ({', '.join(missing)})."
+    try:
+        return (
+            _cached_saved_sketch_store(
+                values["SUPABASE_URL"],
+                values["SUPABASE_SERVICE_ROLE_KEY"],
+                values["GATE_USER_ID"],
+            ),
+            None,
+        )
+    except saved_store.SketchStoreError as exc:
+        return None, str(exc)
+
+
 def _set_saved_notice(kind: str, message: str) -> None:
-    st.session_state["saved_config_notice"] = (kind, message)
+    st.session_state["saved_sketch_notice"] = (kind, message)
 
 
 def _capture_saved_view_state() -> dict:
@@ -1946,22 +1992,6 @@ def _capture_saved_view_state() -> dict:
         plan_variant=st.session_state.get("ui_plan_variant", "all"),
         section_source=st.session_state.get("ui_section_source", "c0-b1-0"),
     )
-
-
-def _open_saved_config(upload_key: str) -> None:
-    uploaded = st.session_state.get(upload_key)
-    if uploaded is None:
-        _set_saved_notice("error", "Choose a configuration file.")
-        return
-    try:
-        payload = saved.parse_payload(uploaded.getvalue())
-    except saved.SavedConfigError as exc:
-        _set_saved_notice("error", str(exc))
-        return
-
-    _load_saved_payload(payload)
-    st.session_state["saved_config_import_nonce"] += 1
-    _set_saved_notice("success", f'Opened "{payload["metadata"]["name"]}".')
 
 
 def _section_source_keys(config: dict) -> list[str]:
@@ -1989,20 +2019,23 @@ def _normalized_saved_plan_variant(config: dict, active_core: int, value: str) -
     return value if {"passenger", "fire"} <= types else "all"
 
 
-def _load_saved_payload(payload: dict) -> None:
-    """Replace the current sketch with an already validated saved payload."""
-    config = payload["config"]
-    view_state = payload["view_state"]
+def _load_saved_record(record: dict) -> None:
+    """Replace the current sketch with an already validated Supabase record."""
+    config = record["config"]
+    view_state = record["view_state"]
     active_core = max(0, min(view_state["active_core"], len(config["cores"]) - 1))
     source_keys = _section_source_keys(config)
     section_source = view_state["section_source"]
     if section_source not in source_keys:
         section_source = source_keys[0]
 
-    # Whole-config replacement is intentional: linked lift values, separators,
-    # dormant machine fields and the section snapshot must remain exact.
-    set_config(config)
     stt = st.session_state
+    # Opening a document starts a fresh undo timeline. This keeps Undo from
+    # silently changing the contents associated with the newly active record.
+    stt["config"] = ss.deep_copy_config(config)
+    stt["hist_past"] = []
+    stt["hist_future"] = []
+    bump_rev()
     stt["ui_active_core"] = active_core
     stt["ui_plan_variant"] = _normalized_saved_plan_variant(
         config, active_core, view_state["plan_variant"]
@@ -2014,73 +2047,218 @@ def _load_saved_payload(payload: dict) -> None:
     stt["_force_preview_generation"] = True
 
 
-def _render_saved_configurations() -> None:
-    """Render a compact, file-style Save/Open toolbar beside the app title."""
-    title_col, save_col, open_col = st.columns(
-        [8, 1.15, 1.15],
+def _refresh_saved_sketches(
+    store: saved_store.SavedSketchStore,
+    *,
+    report_error: bool = True,
+) -> bool:
+    try:
+        st.session_state["saved_sketch_items"] = store.list_sketches()
+        st.session_state["saved_sketch_list_loaded"] = True
+        return True
+    except saved_store.SketchStoreError as exc:
+        st.session_state["saved_sketch_items"] = []
+        st.session_state["saved_sketch_list_loaded"] = True
+        if report_error:
+            _set_saved_notice("error", str(exc))
+        return False
+
+
+def _save_current_sketch(
+    store: saved_store.SavedSketchStore,
+    *,
+    save_as_new: bool,
+) -> None:
+    stt = st.session_state
+    try:
+        snapshot = saved.build_snapshot(
+            stt["saved_sketch_name_input"],
+            stt["config"],
+            _capture_saved_view_state(),
+        )
+        active_id = None if save_as_new else stt.get("active_saved_sketch_id")
+        if save_as_new:
+            current = next(
+                (
+                    item
+                    for item in stt.get("saved_sketch_items", [])
+                    if item["id"] == stt.get("active_saved_sketch_id")
+                ),
+                None,
+            )
+            if (
+                current
+                and snapshot["name"].casefold() == current["name"].casefold()
+            ):
+                snapshot["name"] = saved.available_copy_name(
+                    snapshot["name"],
+                    [
+                        item["name"]
+                        for item in stt.get("saved_sketch_items", [])
+                    ],
+                )
+        if active_id:
+            record = store.update_sketch(
+                active_id,
+                snapshot,
+                expected_updated_at=stt.get("active_saved_sketch_updated_at"),
+            )
+            verb = "Saved"
+        else:
+            record = store.create_sketch(snapshot)
+            verb = "Created"
+    except (saved.SavedSketchError, saved_store.SketchStoreError) as exc:
+        _set_saved_notice("error", str(exc))
+        return
+
+    stt["active_saved_sketch_id"] = record["id"]
+    stt["active_saved_sketch_updated_at"] = record["updated_at"]
+    stt["_saved_sketch_pending_name"] = record["name"]
+    _refresh_saved_sketches(store, report_error=False)
+    _set_saved_notice("success", f'{verb} "{record["name"]}".')
+    st.rerun()
+
+
+def _open_saved_sketch(
+    store: saved_store.SavedSketchStore,
+    sketch_id: str,
+) -> None:
+    try:
+        record = store.get_sketch(sketch_id)
+    except (saved.SavedSketchError, saved_store.SketchStoreError) as exc:
+        _set_saved_notice("error", str(exc))
+        return
+
+    _load_saved_record(record)
+    stt = st.session_state
+    stt["active_saved_sketch_id"] = record["id"]
+    stt["active_saved_sketch_updated_at"] = record["updated_at"]
+    stt["_saved_sketch_pending_name"] = record["name"]
+    _set_saved_notice("success", f'Opened "{record["name"]}".')
+    st.rerun()
+
+
+def _delete_saved_sketch(
+    store: saved_store.SavedSketchStore,
+    sketch_id: str,
+    name: str,
+) -> None:
+    try:
+        store.delete_sketch(sketch_id)
+    except saved_store.SketchStoreError as exc:
+        _set_saved_notice("error", str(exc))
+        return
+
+    stt = st.session_state
+    if stt.get("active_saved_sketch_id") == sketch_id:
+        stt["active_saved_sketch_id"] = None
+        stt["active_saved_sketch_updated_at"] = None
+    stt["_saved_sketch_reset_selection"] = True
+    _refresh_saved_sketches(store, report_error=False)
+    _set_saved_notice("success", f'Deleted "{name}".')
+    st.rerun()
+
+
+def _saved_item_label(item: dict) -> str:
+    return item["name"]
+
+
+def _render_saved_sketches() -> None:
+    """Render the Supabase Save/Open toolbar beside the app title."""
+    stt = st.session_state
+    pending_name = stt.pop("_saved_sketch_pending_name", None)
+    if pending_name is not None:
+        stt["saved_sketch_name_input"] = pending_name
+    if stt.pop("_saved_sketch_reset_selection", False):
+        stt.pop("saved_sketch_selected_id", None)
+
+    store, store_error = _get_saved_sketch_store()
+    if store and not st.session_state["saved_sketch_list_loaded"]:
+        _refresh_saved_sketches(store)
+
+    toolbar = st.container(
+        horizontal=True,
+        horizontal_alignment="left",
         vertical_alignment="center",
+        gap="small",
     )
 
-    with title_col:
-        st.html('<h1 class="main-brand-title">Drawing Debbie</h1>')
+    with toolbar:
+        st.html(
+            '<h1 class="main-brand-title">Drawing Debbie</h1>',
+            width="stretch",
+        )
 
-    with save_col:
-        with st.popover("Save", use_container_width=True):
-            name = st.text_input(
-                "Name",
-                key="saved_config_name_input",
+        with st.popover("Save", width="content"):
+            st.text_input(
+                "Sketch name",
+                key="saved_sketch_name_input",
                 max_chars=saved.MAX_NAME_LENGTH,
             )
-            payload = None
-            save_error = None
-            try:
-                payload = saved.build_payload(
-                    name,
-                    st.session_state["config"],
-                    _capture_saved_view_state(),
-                )
-            except saved.SavedConfigError as exc:
-                save_error = str(exc)
+            if store_error:
+                st.info(store_error)
+            else:
+                active_id = st.session_state.get("active_saved_sketch_id")
+                if st.button(
+                    "Save changes" if active_id else "Save sketch",
+                    key="save_sketch_primary",
+                    type="primary",
+                    width="stretch",
+                ):
+                    _save_current_sketch(store, save_as_new=False)
+                if active_id and st.button(
+                    "Save as new",
+                    key="save_sketch_as_new",
+                    width="stretch",
+                    help="Create a separate copy using the name above.",
+                ):
+                    _save_current_sketch(store, save_as_new=True)
 
-            if save_error and name.strip():
-                st.error(save_error)
+        with st.popover("Open", width="content"):
+            if store_error:
+                st.info(store_error)
+            else:
+                items = st.session_state.get("saved_sketch_items", [])
+                if not items:
+                    st.caption("No saved sketches yet.")
+                else:
+                    by_id = {item["id"]: item for item in items}
+                    selected_id = st.selectbox(
+                        "Saved sketch",
+                        options=list(by_id),
+                        format_func=lambda value: _saved_item_label(by_id[value]),
+                        key="saved_sketch_selected_id",
+                    )
+                    selected = by_id[selected_id]
+                    st.caption(selected["summary"])
+                    updated = saved.format_uae_timestamp(selected["updated_at"])
+                    st.caption(f"Updated {updated}")
+                    open_col, delete_col = st.columns(2)
+                    with open_col:
+                        if st.button(
+                            "Open",
+                            key="open_saved_sketch",
+                            type="primary",
+                            width="stretch",
+                        ):
+                            _open_saved_sketch(store, selected_id)
+                    with delete_col:
+                        if st.button(
+                            "Delete",
+                            key=f"delete_saved_{selected_id}",
+                            width="stretch",
+                            help=(
+                                f'Permanently delete "{selected["name"]}" '
+                                "from saved sketches."
+                            ),
+                        ):
+                            _delete_saved_sketch(
+                                store,
+                                selected_id,
+                                selected["name"],
+                            )
 
-            st.download_button(
-                "Save file",
-                data=saved.payload_to_bytes(payload) if payload else b"",
-                file_name=(
-                    saved.filename_for_name(payload["metadata"]["name"])
-                    if payload
-                    else "sketch-configuration.debbie.json"
-                ),
-                mime="application/json",
-                width="stretch",
-                disabled=payload is None,
-            )
-
-    with open_col:
-        with st.popover("Open", use_container_width=True):
-            upload_key = (
-                f"saved_config_import_"
-                f"{st.session_state['saved_config_import_nonce']}"
-            )
-            st.file_uploader(
-                "Configuration file",
-                type=["json"],
-                key=upload_key,
-                max_upload_size=1,
-                label_visibility="collapsed",
-            )
-            st.button(
-                "Open file",
-                key=f"{upload_key}_button",
-                width="stretch",
-                disabled=st.session_state.get(upload_key) is None,
-                on_click=_open_saved_config,
-                args=(upload_key,),
-            )
-
-    notice = st.session_state.pop("saved_config_notice", None)
+    notice = st.session_state.pop("saved_sketch_notice", None)
     if notice:
         _, message = notice
         st.toast(message)
@@ -2202,7 +2380,7 @@ def main():
     init_state()
     cleanup_old_widget_keys()
 
-    _render_saved_configurations()
+    _render_saved_sketches()
 
     cfg = st.session_state["config"]
     st.session_state["ui_active_core"] = _active_core_index()  # clamp after core removals

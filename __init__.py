@@ -18,15 +18,26 @@ Enhanced features:
 - Break lines for multi-floor sections
 """
 
-from .shaft_sketch import (
-    LiftShaftSketch,
-    LiftConfig,
-    determine_separator_types,
-    FIRE_LIFT_CABIN_SIZES,
-)
-from .section_sketch import LiftSectionSketch, SectionConfig
-from .drawing_utils import brief_spec_row, format_brief_capacity
-from . import config
+if __package__:
+    from .shaft_sketch import (
+        FIRE_LIFT_CABIN_SIZES,
+        LiftConfig,
+        LiftShaftSketch,
+        determine_separator_types,
+    )
+    from .section_sketch import LiftSectionSketch, SectionConfig
+    from .drawing_utils import brief_spec_row, format_brief_capacity
+    from . import config
+else:  # pytest may collect this folder as a top-level module
+    from shaft_sketch import (
+        FIRE_LIFT_CABIN_SIZES,
+        LiftConfig,
+        LiftShaftSketch,
+        determine_separator_types,
+    )
+    from section_sketch import LiftSectionSketch, SectionConfig
+    from drawing_utils import brief_spec_row, format_brief_capacity
+    import config
 
 __all__ = [
     "LiftShaftSketch",

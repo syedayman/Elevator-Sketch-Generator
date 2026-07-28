@@ -1,40 +1,30 @@
-"""Versioned, portable snapshots for the standalone Streamlit app.
+"""Validation for Supabase-backed saved sketches.
 
 The live sketch configuration remains owned by ``st.session_state``.  This
-module is deliberately Streamlit-free so saved files can be validated before
-they are allowed anywhere near the UI state.
+module is deliberately Streamlit- and database-free so snapshots can be
+validated before they cross either boundary.
 """
 
 from __future__ import annotations
 
 import copy
-import json
 import math
 import re
-import unicodedata
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
+from uuid import UUID
 
 import sketch_state as ss
 
 
-FILE_FORMAT = "drawing-debbie-config"
+APP_SCOPE = "drawing-debbie"
 SCHEMA_VERSION = 1
-MAX_FILE_BYTES = 1_000_000
 MAX_NAME_LENGTH = 80
 MAX_TEXT_LENGTH = 200
 MAX_ABS_NUMBER = 1_000_000_000
+UAE_TIMEZONE = timezone(timedelta(hours=4))
 
 _SECTION_SOURCE_RE = re.compile(r"^c\d+-b[12]-\d+$")
-_SAFE_FILENAME_RE = re.compile(r"[^a-z0-9]+")
-_WINDOWS_RESERVED_FILENAMES = {
-    "con",
-    "prn",
-    "aux",
-    "nul",
-    *(f"com{number}" for number in range(1, 10)),
-    *(f"lpt{number}" for number in range(1, 10)),
-}
 
 _DEFAULT_CONFIG = ss.make_default_config()
 _TOP_LEVEL_KEYS = frozenset(_DEFAULT_CONFIG)
@@ -65,39 +55,42 @@ _REQUIRED_LIFT_NUMERIC_FIELDS = frozenset(
 )
 
 
-class SavedConfigError(ValueError):
+class SavedSketchError(ValueError):
     """A saved configuration is malformed, unsafe, or incompatible."""
-
-
-def utc_now() -> str:
-    """Return a compact UTC timestamp suitable for saved-file metadata."""
-    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 def normalize_name(value: Any) -> str:
     """Validate and trim a user-facing saved configuration name."""
     if not isinstance(value, str):
-        raise SavedConfigError("Configuration name must be text.")
+        raise SavedSketchError("Sketch name must be text.")
     name = " ".join(value.strip().split())
     if not name:
-        raise SavedConfigError("Enter a name for this configuration.")
+        raise SavedSketchError("Enter a name for this sketch.")
     if len(name) > MAX_NAME_LENGTH:
-        raise SavedConfigError(
-            f"Configuration name must be {MAX_NAME_LENGTH} characters or fewer."
+        raise SavedSketchError(
+            f"Sketch name must be {MAX_NAME_LENGTH} characters or fewer."
         )
     if any(ord(char) < 32 or ord(char) == 127 for char in name):
-        raise SavedConfigError("Configuration name contains unsupported characters.")
+        raise SavedSketchError("Sketch name contains unsupported characters.")
     return name
 
 
-def filename_for_name(name: str) -> str:
-    """Create a safe, readable filename without changing the display name."""
-    normalized = unicodedata.normalize("NFKD", normalize_name(name))
-    ascii_name = normalized.encode("ascii", "ignore").decode("ascii").lower()
-    slug = _SAFE_FILENAME_RE.sub("-", ascii_name).strip("-")[:60]
-    if slug in _WINDOWS_RESERVED_FILENAMES:
-        slug = ""
-    return f"{slug or 'sketch-configuration'}.debbie.json"
+def available_copy_name(value: Any, existing_names: list[str]) -> str:
+    """Return a conventional, case-insensitively unique copy name."""
+    name = normalize_name(value)
+    existing = {
+        normalized.casefold()
+        for item in existing_names
+        if isinstance(item, str)
+        for normalized in [normalize_name(item)]
+    }
+    for number in range(1, 10_001):
+        suffix = " copy" if number == 1 else f" copy {number}"
+        base = name[: MAX_NAME_LENGTH - len(suffix)].rstrip()
+        candidate = f"{base}{suffix}"
+        if candidate.casefold() not in existing:
+            return candidate
+    raise SavedSketchError("Could not choose an available copy name.")
 
 
 def make_view_state(
@@ -113,121 +106,84 @@ def make_view_state(
     }
 
 
-def build_payload(
+def build_snapshot(
     name: str,
     config: dict,
     view_state: dict,
-    *,
-    saved_at: str | None = None,
-    updated_at: str | None = None,
 ) -> dict:
-    """Validate and snapshot a configuration into the public file envelope."""
+    """Validate and deep-copy the fields persisted in Supabase."""
     clean_name = normalize_name(name)
     validate_config(config)
     validate_view_state(view_state)
-    created = saved_at or utc_now()
-    updated = updated_at or created
-    _validate_timestamp(created, "metadata.saved_at")
-    _validate_timestamp(updated, "metadata.updated_at")
     return {
-        "format": FILE_FORMAT,
+        "name": clean_name,
         "schema_version": SCHEMA_VERSION,
-        "metadata": {
-            "name": clean_name,
-            "saved_at": created,
-            "updated_at": updated,
-        },
         "config": copy.deepcopy(config),
         "view_state": copy.deepcopy(view_state),
     }
 
 
-def rename_payload(payload: dict, name: str) -> dict:
-    """Return a renamed snapshot while preserving its original save time."""
-    validated = validate_payload(payload)
-    return build_payload(
-        name,
-        validated["config"],
-        validated["view_state"],
-        saved_at=validated["metadata"]["saved_at"],
-        updated_at=utc_now(),
-    )
-
-
-def payload_to_bytes(payload: dict) -> bytes:
-    """Serialize a validated payload as deterministic, strict UTF-8 JSON."""
-    validated = validate_payload(payload)
-    try:
-        text = json.dumps(
-            validated,
-            ensure_ascii=False,
-            allow_nan=False,
-            indent=2,
-            sort_keys=True,
-        )
-    except (TypeError, ValueError) as exc:
-        raise SavedConfigError(f"Configuration could not be serialized: {exc}") from exc
-    return (text + "\n").encode("utf-8")
-
-
-def parse_payload(data: bytes | bytearray) -> dict:
-    """Parse and validate a user-supplied saved configuration file."""
-    if not isinstance(data, (bytes, bytearray)):
-        raise SavedConfigError("Configuration file must contain JSON data.")
-    if not data:
-        raise SavedConfigError("The selected configuration file is empty.")
-    if len(data) > MAX_FILE_BYTES:
-        raise SavedConfigError("Configuration file is larger than the 1 MB limit.")
-    try:
-        text = bytes(data).decode("utf-8-sig")
-    except UnicodeDecodeError as exc:
-        raise SavedConfigError("Configuration file must use UTF-8 text.") from exc
-    try:
-        payload = json.loads(
-            text,
-            object_pairs_hook=_unique_object,
-            parse_constant=_reject_json_constant,
-        )
-    except SavedConfigError:
-        raise
-    except (json.JSONDecodeError, RecursionError) as exc:
-        raise SavedConfigError("Configuration file is not valid JSON.") from exc
-    return validate_payload(payload)
-
-
-def validate_payload(payload: Any) -> dict:
-    """Return a deep-copied payload after complete v1 validation."""
-    _expect_mapping(payload, "file")
+def validate_snapshot(snapshot: Any) -> dict:
+    """Return a deep-copied snapshot after complete schema validation."""
+    _expect_mapping(snapshot, "snapshot")
     _expect_exact_keys(
-        payload,
-        {"format", "schema_version", "metadata", "config", "view_state"},
-        "file",
+        snapshot,
+        {"name", "schema_version", "config", "view_state"},
+        "snapshot",
     )
-    if payload["format"] != FILE_FORMAT:
-        raise SavedConfigError("This is not a Drawing Debbie configuration file.")
-    version = payload["schema_version"]
+    version = snapshot["schema_version"]
     if not isinstance(version, int) or isinstance(version, bool):
-        raise SavedConfigError("schema_version must be an integer.")
+        raise SavedSketchError("schema_version must be an integer.")
     if version > SCHEMA_VERSION:
-        raise SavedConfigError(
-            "This configuration was created by a newer version of Drawing Debbie."
+        raise SavedSketchError(
+            "This sketch was created by a newer version of Drawing Debbie."
         )
     if version < SCHEMA_VERSION:
-        raise SavedConfigError(
-            "This configuration uses an older unsupported format."
-        )
+        raise SavedSketchError("This sketch uses an older unsupported format.")
 
-    metadata = payload["metadata"]
-    _expect_mapping(metadata, "metadata")
-    _expect_exact_keys(metadata, {"name", "saved_at", "updated_at"}, "metadata")
-    clean_name = normalize_name(metadata["name"])
-    _validate_timestamp(metadata["saved_at"], "metadata.saved_at")
-    _validate_timestamp(metadata["updated_at"], "metadata.updated_at")
-    validate_config(payload["config"])
-    validate_view_state(payload["view_state"])
-    result = copy.deepcopy(payload)
-    result["metadata"]["name"] = clean_name
+    clean_name = normalize_name(snapshot["name"])
+    validate_config(snapshot["config"])
+    validate_view_state(snapshot["view_state"])
+    result = copy.deepcopy(snapshot)
+    result["name"] = clean_name
     return result
+
+
+def record_from_row(row: Any) -> dict:
+    """Validate a full Supabase row before it is loaded into app state."""
+    _expect_mapping(row, "saved sketch")
+    required = {
+        "id",
+        "name",
+        "schema_version",
+        "config",
+        "view_state",
+        "created_at",
+        "updated_at",
+    }
+    missing = sorted(required - set(row))
+    if missing:
+        raise SavedSketchError(f"Saved sketch is missing: {', '.join(missing)}.")
+    try:
+        UUID(str(row["id"]))
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise SavedSketchError("Saved sketch has an invalid ID.") from exc
+    _validate_timestamp(row["created_at"], "created_at")
+    _validate_timestamp(row["updated_at"], "updated_at")
+    snapshot = validate_snapshot(
+        {
+            "name": row["name"],
+            "schema_version": row["schema_version"],
+            "config": row["config"],
+            "view_state": row["view_state"],
+        }
+    )
+    return {
+        "id": str(row["id"]),
+        **snapshot,
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
 
 
 def validate_config(config: Any) -> None:
@@ -236,13 +192,13 @@ def validate_config(config: Any) -> None:
     _expect_exact_keys(config, _TOP_LEVEL_KEYS, "config")
 
     if config["machine_type"] not in {"mrl", "mra"}:
-        raise SavedConfigError("config.machine_type must be 'mrl' or 'mra'.")
+        raise SavedSketchError("config.machine_type must be 'mrl' or 'mra'.")
 
     cores = config["cores"]
     if not isinstance(cores, list):
-        raise SavedConfigError("config.cores must be a list.")
+        raise SavedSketchError("config.cores must be a list.")
     if not 1 <= len(cores) <= ss.MAX_CORES:
-        raise SavedConfigError(
+        raise SavedSketchError(
             f"config.cores must contain between 1 and {ss.MAX_CORES} cores."
         )
     for index, core in enumerate(cores):
@@ -250,7 +206,9 @@ def validate_config(config: Any) -> None:
 
     for field in _TOP_LEVEL_BOOL_FIELDS:
         _expect_bool(config[field], f"config.{field}")
-    _expect_positive_number(config["dimension_font_scale"], "config.dimension_font_scale")
+    _expect_positive_number(
+        config["dimension_font_scale"], "config.dimension_font_scale"
+    )
     _expect_positive_number(
         config["section_dimension_font_scale"],
         "config.section_dimension_font_scale",
@@ -272,14 +230,14 @@ def validate_view_state(view_state: Any) -> None:
         or active_core < 0
         or active_core >= ss.MAX_CORES
     ):
-        raise SavedConfigError("view_state.active_core is invalid.")
+        raise SavedSketchError("view_state.active_core is invalid.")
     if view_state["plan_variant"] not in {"all", "passenger", "fire"}:
-        raise SavedConfigError("view_state.plan_variant is invalid.")
+        raise SavedSketchError("view_state.plan_variant is invalid.")
     section_source = view_state["section_source"]
     if not isinstance(section_source, str) or not _SECTION_SOURCE_RE.fullmatch(
         section_source
     ):
-        raise SavedConfigError("view_state.section_source is invalid.")
+        raise SavedSketchError("view_state.section_source is invalid.")
 
 
 def config_summary(config: dict) -> str:
@@ -302,7 +260,7 @@ def _validate_core(core: Any, index: int, machine_type: str) -> None:
     _expect_exact_keys(core, _CORE_KEYS, path)
     _expect_text(core["name"], f"{path}.name", max_length=MAX_NAME_LENGTH)
     if core["arrangement"] not in {"Inline", "Facing"}:
-        raise SavedConfigError(f"{path}.arrangement is invalid.")
+        raise SavedSketchError(f"{path}.arrangement is invalid.")
     _expect_bool(core["common_shaft"], f"{path}.common_shaft")
     _expect_positive_number(core["wall_thickness_mm"], f"{path}.wall_thickness_mm")
     _expect_positive_number(core["lobby_width_mm"], f"{path}.lobby_width_mm")
@@ -310,16 +268,16 @@ def _validate_core(core: Any, index: int, machine_type: str) -> None:
     bank1 = core["bank1_lifts"]
     bank2 = core["bank2_lifts"]
     if not isinstance(bank1, list) or not 1 <= len(bank1) <= ss.MAX_LIFTS_PER_BANK:
-        raise SavedConfigError(
+        raise SavedSketchError(
             f"{path}.bank1_lifts must contain between 1 and "
             f"{ss.MAX_LIFTS_PER_BANK} lifts."
         )
     if not isinstance(bank2, list) or not 0 <= len(bank2) <= ss.MAX_LIFTS_PER_BANK:
-        raise SavedConfigError(
+        raise SavedSketchError(
             f"{path}.bank2_lifts must contain at most {ss.MAX_LIFTS_PER_BANK} lifts."
         )
     if core["arrangement"] == "Facing" and not bank2:
-        raise SavedConfigError(f"{path}.bank2_lifts cannot be empty for a Facing core.")
+        raise SavedSketchError(f"{path}.bank2_lifts cannot be empty for a Facing core.")
 
     for bank_name, lifts in (("bank1_lifts", bank1), ("bank2_lifts", bank2)):
         for lift_index, lift in enumerate(lifts):
@@ -336,22 +294,24 @@ def _validate_core(core: Any, index: int, machine_type: str) -> None:
         separators = core[separator_field]
         expected_length = max(0, len(lifts) - 1)
         if not isinstance(separators, list) or len(separators) != expected_length:
-            raise SavedConfigError(
+            raise SavedSketchError(
                 f"{path}.{separator_field} must contain {expected_length} entries."
             )
         if any(value not in {"rcc_wall", "steel_beam"} for value in separators):
-            raise SavedConfigError(f"{path}.{separator_field} contains an invalid value.")
+            raise SavedSketchError(
+                f"{path}.{separator_field} contains an invalid value."
+            )
 
 
 def _validate_lift(lift: Any, path: str, machine_type: str) -> None:
     _expect_mapping(lift, path)
     _expect_exact_keys(lift, _LIFT_KEYS, path)
     if lift["type"] not in {"passenger", "fire"}:
-        raise SavedConfigError(f"{path}.type is invalid.")
+        raise SavedSketchError(f"{path}.type is invalid.")
     if lift["door_opening_type"] not in {"centre", "telescopic"}:
-        raise SavedConfigError(f"{path}.door_opening_type is invalid.")
+        raise SavedSketchError(f"{path}.door_opening_type is invalid.")
     if lift["door_offset_direction"] not in {"left", "right"}:
-        raise SavedConfigError(f"{path}.door_offset_direction is invalid.")
+        raise SavedSketchError(f"{path}.door_offset_direction is invalid.")
     _expect_text(lift["lift_id"], f"{path}.lift_id", max_length=MAX_NAME_LENGTH)
     for field in _LIFT_BOOL_FIELDS:
         _expect_bool(lift[field], f"{path}.{field}")
@@ -361,7 +321,7 @@ def _validate_lift(lift: Any, path: str, machine_type: str) -> None:
         field_path = f"{path}.{field}"
         if value is None:
             if field in _REQUIRED_LIFT_NUMERIC_FIELDS:
-                raise SavedConfigError(f"{field_path} is required.")
+                raise SavedSketchError(f"{field_path} is required.")
             continue
         allow_zero = field == "door_offset_mm"
         _expect_number(value, field_path, allow_zero=allow_zero)
@@ -369,7 +329,7 @@ def _validate_lift(lift: Any, path: str, machine_type: str) -> None:
     # Retain machine-specific dormant values exactly; only ensure the machine
     # selector itself is a supported value.
     if machine_type not in {"mrl", "mra"}:
-        raise SavedConfigError(f"{path} has an unsupported machine type.")
+        raise SavedSketchError(f"{path} has an unsupported machine type.")
 
 
 def _validate_section(section: Any) -> None:
@@ -386,7 +346,7 @@ def _validate_section(section: Any) -> None:
 
 def _expect_mapping(value: Any, path: str) -> None:
     if not isinstance(value, dict):
-        raise SavedConfigError(f"{path} must be an object.")
+        raise SavedSketchError(f"{path} must be an object.")
 
 
 def _expect_exact_keys(value: dict, expected: set | frozenset, path: str) -> None:
@@ -394,23 +354,25 @@ def _expect_exact_keys(value: dict, expected: set | frozenset, path: str) -> Non
     missing = sorted(expected - actual)
     extra = sorted(actual - expected)
     if missing:
-        raise SavedConfigError(f"{path} is missing: {', '.join(missing)}.")
+        raise SavedSketchError(f"{path} is missing: {', '.join(missing)}.")
     if extra:
-        raise SavedConfigError(f"{path} contains unsupported fields: {', '.join(extra)}.")
+        raise SavedSketchError(
+            f"{path} contains unsupported fields: {', '.join(extra)}."
+        )
 
 
 def _expect_bool(value: Any, path: str) -> None:
     if not isinstance(value, bool):
-        raise SavedConfigError(f"{path} must be true or false.")
+        raise SavedSketchError(f"{path} must be true or false.")
 
 
 def _expect_text(value: Any, path: str, *, max_length: int = MAX_TEXT_LENGTH) -> None:
     if not isinstance(value, str):
-        raise SavedConfigError(f"{path} must be text.")
+        raise SavedSketchError(f"{path} must be text.")
     if len(value) > max_length:
-        raise SavedConfigError(f"{path} is too long.")
+        raise SavedSketchError(f"{path} is too long.")
     if any(ord(char) < 32 and char not in "\t" for char in value):
-        raise SavedConfigError(f"{path} contains unsupported characters.")
+        raise SavedSketchError(f"{path} contains unsupported characters.")
 
 
 def _expect_positive_number(value: Any, path: str) -> None:
@@ -419,40 +381,38 @@ def _expect_positive_number(value: Any, path: str) -> None:
 
 def _expect_number(value: Any, path: str, *, allow_zero: bool) -> None:
     if not isinstance(value, (int, float)) or isinstance(value, bool):
-        raise SavedConfigError(f"{path} must be a number.")
+        raise SavedSketchError(f"{path} must be a number.")
     if isinstance(value, float) and math.isnan(value):
-        raise SavedConfigError(
-            f"{path} is blank. Fill blank inputs before saving the configuration."
+        raise SavedSketchError(
+            f"{path} is blank. Fill blank inputs before saving the sketch."
         )
     if not math.isfinite(value):
-        raise SavedConfigError(f"{path} must be a finite number.")
+        raise SavedSketchError(f"{path} must be a finite number.")
     if abs(value) > MAX_ABS_NUMBER:
-        raise SavedConfigError(f"{path} is outside the supported range.")
+        raise SavedSketchError(f"{path} is outside the supported range.")
     if value < 0 or (not allow_zero and value == 0):
         qualifier = "zero or greater" if allow_zero else "greater than zero"
-        raise SavedConfigError(f"{path} must be {qualifier}.")
+        raise SavedSketchError(f"{path} must be {qualifier}.")
 
 
-def _validate_timestamp(value: Any, path: str) -> None:
+def format_uae_timestamp(value: Any) -> str:
+    """Format an ISO-8601 timestamp as UAE local date and time."""
+    return _parse_timestamp(value, "updated_at").astimezone(UAE_TIMEZONE).strftime(
+        "%Y-%m-%d %H:%M"
+    )
+
+
+def _parse_timestamp(value: Any, path: str) -> datetime:
     if not isinstance(value, str) or len(value) > 64:
-        raise SavedConfigError(f"{path} must be an ISO-8601 timestamp.")
+        raise SavedSketchError(f"{path} must be an ISO-8601 timestamp.")
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError as exc:
-        raise SavedConfigError(f"{path} must be an ISO-8601 timestamp.") from exc
+        raise SavedSketchError(f"{path} must be an ISO-8601 timestamp.") from exc
     if parsed.tzinfo is None:
-        raise SavedConfigError(f"{path} must include a timezone.")
+        raise SavedSketchError(f"{path} must include a timezone.")
+    return parsed
 
 
-def _unique_object(pairs: list[tuple[str, Any]]) -> dict:
-    result = {}
-    for key, value in pairs:
-        if key in result:
-            raise SavedConfigError(f"Configuration file repeats the field '{key}'.")
-        result[key] = value
-    return result
-
-
-def _reject_json_constant(value: str) -> None:
-    raise SavedConfigError(f"Configuration file contains invalid number {value}.")
-
+def _validate_timestamp(value: Any, path: str) -> None:
+    _parse_timestamp(value, path)
