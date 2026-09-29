@@ -1240,7 +1240,9 @@ def render_lift_form(ci: int, bank: str, idx: int, machine_type: str,
 # Section config form — config-driven port of the web SectionConfigForm
 # =============================================================================
 
-def render_section_form(machine_type: str) -> None:
+def render_section_form(machine_type: str, lift_type: str) -> None:
+    """`lift_type` is the depicted lift's type; the form edits that type's
+    floor-label pair."""
     cfg = st.session_state["config"]
     S = cfg["section"]
 
@@ -1293,6 +1295,52 @@ def render_section_form(machine_type: str) -> None:
                 min_value=2000, max_value=6000, step=100,
                 seed=S.get("machine_room_height") if S.get("machine_room_height") is not None
                 else 3000)
+
+    # Landing labels for this lift type; blank keeps the generic labels.
+    top_field = f"{lift_type}_top_floor_number"
+    lowest_field = f"{lift_type}_lowest_floor_name"
+    lowest_floor = (S.get(lowest_field) or "").strip()
+
+    def _write_section(field, value):
+        c = st.session_state["config"]
+        set_config({**c, "section": {**c["section"], field: value}})
+
+    st.caption(f"{'Fire' if lift_type == 'fire' else 'Passenger'} lift floor labels")
+    f1, f2 = st.columns(2)
+    with f1:
+        top_key = f"section_{top_field}"
+        top_wkey = _wk(top_key)
+
+        def _cb_top_floor():
+            if top_wkey not in st.session_state:
+                return  # stale event from a previous widget revision
+            raw = st.session_state[top_wkey]
+            _write_section(top_field, None if raw is None else int(raw))
+
+        _num(top_key, "Top Floor Number", seed=S.get(top_field),
+             min_value=ss.TOP_FLOOR_BOUNDS[0], max_value=ss.TOP_FLOOR_BOUNDS[1],
+             on_change=_cb_top_floor,
+             help="The top landing reads Floor N F.F.L. and the one below it "
+                  "Floor N-1 F.F.L. Leave blank for the generic Top Floor label.")
+    with f2:
+        lowest_wkey = _wk(f"section_{lowest_field}")
+        if lowest_wkey not in st.session_state:
+            st.session_state[lowest_wkey] = lowest_floor
+
+        def _cb_lowest_floor():
+            if lowest_wkey not in st.session_state:
+                return  # stale event from a previous widget revision
+            _write_section(lowest_field, st.session_state[lowest_wkey].strip())
+
+        st.text_input("Lowest Floor", key=lowest_wkey, placeholder="e.g. G or B2",
+                      max_chars=ss.FLOOR_NAME_MAX_LENGTH, on_change=_cb_lowest_floor)
+
+    for col, name in zip(st.columns(len(ss.LOWEST_FLOOR_PRESETS)),
+                         ss.LOWEST_FLOOR_PRESETS):
+        with col:
+            st.button(name, key=_wk(f"section_lowest_{name}"), width="stretch",
+                      type="primary" if lowest_floor == name else "secondary",
+                      on_click=_write_section, args=(lowest_field, name))
 
 
 # =============================================================================
@@ -1479,6 +1527,7 @@ def _render_section_png(cfg: dict) -> bytes:
         "travel_height": section["travel_height"],
         "door_height": section["door_height"],
         "structural_opening_height": section["structural_opening_height"],
+        **ss.section_floor_labels(section, pick_lift["type"]),
     }
     if mt == "mra" and section.get("machine_room_height") is not None:
         section_kwargs["machine_room_height"] = section["machine_room_height"]
@@ -2319,7 +2368,15 @@ def _clear_all() -> None:
         "wall_thickness_mm": float("nan"),
         "lobby_width_mm": float("nan"),
     } for core in cfg["cores"]]
-    set_config({**cfg, "cores": cores, "section": ss.blank_numeric_fields(cfg["section"])})
+    section = {
+        **ss.blank_numeric_fields(cfg["section"]),
+        # Floor labels are optional, so blank means None / "" rather than NaN.
+        "passenger_top_floor_number": None,
+        "passenger_lowest_floor_name": "",
+        "fire_top_floor_number": None,
+        "fire_lowest_floor_name": "",
+    }
+    set_config({**cfg, "cores": cores, "section": section})
     st.session_state["plan_error"] = None
     st.session_state["section_error"] = None
 
@@ -2850,7 +2907,7 @@ def main():
                          key=srckey, on_change=_cb_section_source,
                          label_visibility="collapsed")
 
-            render_section_form(machine_type)
+            render_section_form(machine_type, resolve_section_lift(cfg)[0]["type"])
 
         with col_section_preview:
             st.header("Preview")

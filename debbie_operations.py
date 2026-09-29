@@ -44,10 +44,12 @@ from sketch_state import (
     compute_default_separator_types,
     fill_blank_lift_ids,
     lift_error,
+    lowest_floor_error,
     make_default_core,
     make_default_lift,
     plan_dimension_font_max,
     section_error,
+    top_floor_error,
 )
 
 # ── Operation vocabulary (mirror of debbie-operations.ts) ──
@@ -86,7 +88,7 @@ KNOWN_OPS = frozenset([
     "add_lift", "remove_lift", "set_arrangement", "set_common_shaft",
     "add_core", "remove_core", "set_lobby_width", "set_separator_type",
     "set_display_option", "set_font_scale", "set_machine_type",
-    "set_section_field",
+    "set_section_field", "set_floor_labels",
 ])
 
 
@@ -571,6 +573,46 @@ def apply_operations(cfg: dict, ops: list, active_core: int = 0):
                     continue
                 working = {**working, "section": next_section}
                 results.append(_applied(op, f"Set section {field} = {value}."))
+
+            elif name == "set_floor_labels":
+                # lift_type omitted → both passenger and fire sections; a null
+                # top floor / "" lowest floor clears back to the generic labels.
+                lift_type = op.get("lift_type")
+                has_top = "top_floor_number" in op
+                has_lowest = "lowest_floor_name" in op
+                if lift_type not in (None, "passenger", "fire"):
+                    results.append(_rejected(op, "Malformed operation."))
+                    continue
+                if not has_top and not has_lowest:
+                    results.append(_rejected(
+                        op, "Give a top floor number or a lowest floor name."))
+                    continue
+                top = op.get("top_floor_number")
+                lowest = op.get("lowest_floor_name")
+                err = has_top and top_floor_error(top)
+                if err:
+                    results.append(_rejected(op, f"top floor number: {err}"))
+                    continue
+                err = has_lowest and lowest_floor_error(lowest)
+                if err:
+                    results.append(_rejected(op, f"lowest floor: {err}"))
+                    continue
+                types = [lift_type] if lift_type else ["passenger", "fire"]
+                section = dict(working["section"])
+                for t in types:
+                    if has_top:
+                        section[f"{t}_top_floor_number"] = None if top is None else int(top)
+                    if has_lowest:
+                        section[f"{t}_lowest_floor_name"] = lowest.strip()
+                working = {**working, "section": section}
+                changes = []
+                if has_top:
+                    changes.append("top floor cleared" if top is None else f"top floor {int(top)}")
+                if has_lowest:
+                    changes.append(f"lowest floor {lowest.strip()}" if lowest.strip()
+                                   else "lowest floor cleared")
+                results.append(_applied(
+                    op, f"Set {' and '.join(types)} floor labels: {', '.join(changes)}."))
 
             elif name == "set_lift_id":
                 targets = _resolve_lift_targets(working, op.get("target") or {})

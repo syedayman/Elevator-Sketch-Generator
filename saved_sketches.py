@@ -30,7 +30,9 @@ _DEFAULT_CONFIG = ss.make_default_config()
 _TOP_LEVEL_KEYS = frozenset(_DEFAULT_CONFIG)
 _CORE_KEYS = frozenset(_DEFAULT_CONFIG["cores"][0])
 _LIFT_KEYS = frozenset(_DEFAULT_CONFIG["cores"][0]["bank1_lifts"][0])
-_SECTION_KEYS = frozenset(_DEFAULT_CONFIG["section"])
+# Required section keys. The floor-label keys are optional: snapshots saved
+# before they existed omit them (blank = generic landing labels).
+_SECTION_KEYS = frozenset(_DEFAULT_CONFIG["section"]) - ss.FLOOR_LABEL_KEYS
 
 _TOP_LEVEL_BOOL_FIELDS = frozenset(
     key for key, value in _DEFAULT_CONFIG.items() if isinstance(value, bool)
@@ -335,13 +337,24 @@ def _validate_lift(lift: Any, path: str, machine_type: str) -> None:
 def _validate_section(section: Any) -> None:
     path = "config.section"
     _expect_mapping(section, path)
-    _expect_exact_keys(section, _SECTION_KEYS, path)
+    floor_fields = ss.FLOOR_LABEL_KEYS & set(section)
+    _expect_exact_keys(
+        {key: value for key, value in section.items() if key not in floor_fields},
+        _SECTION_KEYS,
+        path,
+    )
     for field in _SECTION_KEYS:
         value = section[field]
         field_path = f"{path}.{field}"
         if value is None and field == "machine_room_height":
             continue
         _expect_positive_number(value, field_path)
+    for field in floor_fields:
+        value = section[field]
+        err = (ss.top_floor_error(value) if field.endswith("_top_floor_number")
+               else ss.lowest_floor_error(value))
+        if err:
+            raise SavedSketchError(f"{path}.{field} {err}.")
 
 
 def _expect_mapping(value: Any, path: str) -> None:

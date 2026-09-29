@@ -6,6 +6,8 @@ Complements the plan sketch (top-down view) in shaft_sketch.py.
 """
 
 import io
+import re
+import textwrap
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -68,6 +70,12 @@ class SectionConfig:
     # MRA (Machine Room Above) parameters
     machine_room_height: float = field(default_factory=lambda: config.DEFAULT_MACHINE_ROOM_HEIGHT)
 
+    # Landing labels. Blank keeps the generic wording. top_floor_number N names
+    # the top two landings Floor N / Floor N-1; lowest_floor_name names the
+    # bottom landing, and the landing above it follows (see floor_above).
+    top_floor_number: Optional[int] = None
+    lowest_floor_name: str = ""
+
     @property
     def total_shaft_height(self) -> float:
         """Total height from pit bottom to overhead top."""
@@ -77,6 +85,46 @@ class SectionConfig:
     def num_floors(self) -> int:
         """Approximate number of floors based on travel height."""
         return max(2, int(self.travel_height / self.floor_height) + 1)
+
+
+_INTEGER_FLOOR = re.compile(r"-?\d+")
+_BASEMENT_FLOOR = re.compile(r"(b(?:asement)?)([ -]?)(\d*)", re.IGNORECASE)
+_NUMBERED_FLOOR = re.compile(r"(.*?)(\d+)")
+
+
+def floor_above(name: str) -> str:
+    """Name of the landing directly above the landing called `name`.
+
+    Basements count up towards ground (B2 -> B1, B / B1 -> G), lower ground
+    sits below ground (LG -> G), other numbered floors count up (5 -> 6,
+    P1 -> P2), and any other name is followed by Floor 1 (G -> 1).
+    """
+    name = name.strip()
+    if _INTEGER_FLOOR.fullmatch(name):
+        return str(int(name) + 1)
+    basement = _BASEMENT_FLOOR.fullmatch(name)
+    if basement:
+        prefix, separator, digits = basement.groups()
+        level = int(digits) if digits else 1
+        if level <= 1:
+            return "G"
+        return f"{prefix}{separator}{str(level - 1).zfill(len(digits))}"
+    if name.upper() in ("LG", "LOWER GROUND"):
+        return "G"
+    numbered = _NUMBERED_FLOOR.fullmatch(name)
+    if numbered:
+        prefix, digits = numbered.groups()
+        return f"{prefix}{str(int(digits) + 1).zfill(len(digits))}"
+    return "1"
+
+
+def _floor_label(name: str) -> str:
+    """Landing label for a named floor, e.g. "Floor B2 F.F.L.".
+
+    Lines wrap at the width of the generic "Floor n-1 F.F.L." so long names
+    stay clear of the vertical dimensions on their left.
+    """
+    return textwrap.fill(f"Floor {name} F.F.L.", width=16)
 
 
 class LiftSectionSketch:
@@ -152,6 +200,9 @@ class LiftSectionSketch:
         self.travel_height = self.section_config.travel_height
         self.floor_height = self.section_config.floor_height
         self.car_interior_height = self.section_config.car_interior_height
+        top_floor = self.section_config.top_floor_number
+        self.top_floor_number = None if top_floor is None else int(top_floor)
+        self.lowest_floor_name = (self.section_config.lowest_floor_name or "").strip()
 
         # Calculate geometry
         self._calculate_geometry()
@@ -788,6 +839,20 @@ class LiftSectionSketch:
             return []
         return [brief_spec_row(self.lift_config)]
 
+    def _landing_labels(self) -> tuple[str, str, str, str]:
+        """Labels of the four drawn landings, bottom to top."""
+        if self.lowest_floor_name:
+            bottom = _floor_label(self.lowest_floor_name)
+            second = _floor_label(floor_above(self.lowest_floor_name))
+        else:
+            bottom, second = "Bottom-most\nLanding FFL", "Floor 1 F.F.L."
+        if self.top_floor_number is not None:
+            below_top = _floor_label(str(self.top_floor_number - 1))
+            top = _floor_label(str(self.top_floor_number))
+        else:
+            below_top, top = "Floor n-1 F.F.L.", "Top Floor F.F.L."
+        return bottom, second, below_top, top
+
     def _draw_section_dimensions(
         self,
         ax: plt.Axes,
@@ -903,38 +968,23 @@ class LiftSectionSketch:
         )
 
         # Place landing labels just beyond the outer end of the left slab.
+        # parse_math=False: floor names are user text, never mathtext.
         floor_label_x = -450
-        ax.text(
-            floor_label_x, ground_floor_slab_y - slab_thickness - 100,
-            "Bottom-most\nLanding FFL",
-            ha="right", va="top",
-            fontsize=config.DIMENSION_TEXT_SIZE,
-            color=config.DIMENSION_COLOR,
+        landing_levels = (
+            ground_floor_slab_y,
+            floor_1_level,
+            floor_n_minus_1_level,
+            top_level,
         )
-
-        ax.text(
-            floor_label_x, floor_1_level - slab_thickness - 100,
-            "Floor 1 F.F.L.",
-            ha="right", va="top",
-            fontsize=config.DIMENSION_TEXT_SIZE,
-            color=config.DIMENSION_COLOR,
-        )
-
-        ax.text(
-            floor_label_x, floor_n_minus_1_level - slab_thickness - 100,
-            "Floor n-1 F.F.L.",
-            ha="right", va="top",
-            fontsize=config.DIMENSION_TEXT_SIZE,
-            color=config.DIMENSION_COLOR,
-        )
-
-        ax.text(
-            floor_label_x, top_level - slab_thickness - 100,
-            "Top Floor F.F.L.",
-            ha="right", va="top",
-            fontsize=config.DIMENSION_TEXT_SIZE,
-            color=config.DIMENSION_COLOR,
-        )
+        for level, label in zip(landing_levels, self._landing_labels()):
+            ax.text(
+                floor_label_x, level - slab_thickness - 100,
+                label,
+                ha="right", va="top",
+                fontsize=config.DIMENSION_TEXT_SIZE,
+                color=config.DIMENSION_COLOR,
+                parse_math=False,
+            )
 
         # Structural opening dimensions (on left side, near the openings)
         opening_height = self.structural_opening_height

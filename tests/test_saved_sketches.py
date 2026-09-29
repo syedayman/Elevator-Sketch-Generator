@@ -38,6 +38,30 @@ def test_default_config_snapshot_is_valid_and_detached():
     assert config["section"]["pit_depth"] != 9999
 
 
+def test_floor_labels_are_optional_and_validated():
+    # Snapshots saved before floor labels existed omit the keys.
+    older = ss.make_default_config()
+    for key in ss.FLOOR_LABEL_KEYS:
+        del older["section"][key]
+    saved.validate_snapshot(_snapshot(older))
+
+    named = ss.make_default_config()
+    named["section"]["passenger_top_floor_number"] = 25
+    named["section"]["passenger_lowest_floor_name"] = "B2"
+    saved.validate_snapshot(_snapshot(named))
+
+    for key, value in (
+        ("passenger_top_floor_number", 1),
+        ("fire_top_floor_number", 12.5),
+        ("fire_lowest_floor_name", "x" * 13),
+        ("fire_lowest_floor_name", None),
+    ):
+        bad = ss.make_default_config()
+        bad["section"][key] = value
+        with pytest.raises(saved.SavedSketchError):
+            _snapshot(bad)
+
+
 def test_mra_facing_multi_lift_summary_and_validation():
     config = ss.make_default_config()
     config["machine_type"] = "mra"

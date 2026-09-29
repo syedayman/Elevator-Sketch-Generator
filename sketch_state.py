@@ -234,6 +234,53 @@ def make_default_section() -> dict:
         "door_height": 2100,
         "structural_opening_height": 2200,
         "machine_room_height": 3000,
+        # Landing labels, one pair per lift type (blank = generic labels).
+        "passenger_top_floor_number": None,
+        "passenger_lowest_floor_name": "",
+        "fire_top_floor_number": None,
+        "fire_lowest_floor_name": "",
+    }
+
+
+# ── Section floor labels (mirror of sectionFormDataSchema) ──
+
+FLOOR_LABEL_KEYS = frozenset([
+    "passenger_top_floor_number", "passenger_lowest_floor_name",
+    "fire_top_floor_number", "fire_lowest_floor_name",
+])
+TOP_FLOOR_BOUNDS = (2, 250)
+FLOOR_NAME_MAX_LENGTH = 12
+# Quick picks for a section's lowest floor name.
+LOWEST_FLOOR_PRESETS = ("G", "LG", "B", "B1", "B2", "B3")
+
+
+def top_floor_error(value):
+    """None (blank) or a whole number 2-250; error message or None."""
+    if value is None:
+        return None
+    lo, hi = TOP_FLOOR_BOUNDS
+    if not _is_number(value) or not math.isfinite(value) or value != int(value):
+        return "must be a whole number"
+    if not lo <= value <= hi:
+        return f"must be between {lo} and {hi}"
+    return None
+
+
+def lowest_floor_error(value):
+    """Text of at most FLOOR_NAME_MAX_LENGTH characters; error message or None."""
+    if not isinstance(value, str):
+        return "must be text"
+    if len(value.strip()) > FLOOR_NAME_MAX_LENGTH:
+        return f"must be {FLOOR_NAME_MAX_LENGTH} characters or fewer"
+    return None
+
+
+def section_floor_labels(section: dict, lift_type: str) -> dict:
+    """SectionConfig landing-label kwargs for one lift type's section. Port of
+    sketch_generator_task.section_floor_labels."""
+    return {
+        "top_floor_number": section.get(f"{lift_type}_top_floor_number"),
+        "lowest_floor_name": section.get(f"{lift_type}_lowest_floor_name") or "",
     }
 
 

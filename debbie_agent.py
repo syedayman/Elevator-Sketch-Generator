@@ -160,6 +160,14 @@ GLOBAL / SECTION:
 - set_section_field {field, value}  — field is one of: shaft_depth, wall_thickness,
   pit_slab, pit_depth, travel_height, overhead_clearance, door_height,
   structural_opening_height, machine_room_height
+- set_floor_labels {lift_type?, top_floor_number?, lowest_floor_name?}  — lift_type
+  is "passenger" or "fire". Floor names beside the section's landings. \
+top_floor_number N (whole number 2-250) labels the top landing "Floor N" and the \
+one below "Floor N-1"; \
+lowest_floor_name (short text, e.g. "G", "B2", "LG") labels the bottom landing and \
+the landing above it follows automatically (B2 → B1, B → G, G → 1). Passenger \
+and fire sections each keep their own pair: lift_type omitted sets BOTH. \
+null / "" clears back to the generic labels. Send only the parts the user gave.
 
 FIELD VOCABULARY — consult ONLY when the message itself doesn't name the field:
 - "clearance": running clearance = door_gap; headroom = overhead_clearance; \
@@ -176,6 +184,8 @@ boxes are cw_box_width / mra_cw_box_width. Use the current machine_type's \
 fields and ask which one if still unclear.
 - "rails": rail_width_left vs rail_width_right (or both).
 - "service lift" / "FL/SL" = a fire lift (type "fire").
+- "top floor", "lowest/bottom floor", "floor names/labels", "basement", \
+"ground floor" = the section's floor labels (set_floor_labels), NOT travel_height.
 
 DOOR POSITION (commonly confused — read carefully): position is two fields: \
 door_offset_mm (distance from centre, in mm) and door_offset_direction \
@@ -246,6 +256,8 @@ TOOLS: List[Dict[str, Any]] = [
                                 "core": {},
                                 "bank": {"type": "string"},
                                 "lift_type": {"type": "string"},
+                                "top_floor_number": {},
+                                "lowest_floor_name": {"type": "string"},
                             },
                             "required": ["op"],
                         },
