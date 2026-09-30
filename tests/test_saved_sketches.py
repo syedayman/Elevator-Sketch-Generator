@@ -48,6 +48,7 @@ def test_floor_labels_are_optional_and_validated():
     named = ss.make_default_config()
     named["section"]["passenger_top_floor_number"] = 25
     named["section"]["passenger_lowest_floor_name"] = "B2"
+    named["section"]["passenger_average_floor_height"] = 3450
     saved.validate_snapshot(_snapshot(named))
 
     for key, value in (
@@ -55,6 +56,8 @@ def test_floor_labels_are_optional_and_validated():
         ("fire_top_floor_number", 12.5),
         ("fire_lowest_floor_name", "x" * 13),
         ("fire_lowest_floor_name", None),
+        ("passenger_average_floor_height", 999),
+        ("fire_average_floor_height", float("nan")),
     ):
         bad = ss.make_default_config()
         bad["section"][key] = value

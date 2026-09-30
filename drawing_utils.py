@@ -537,6 +537,8 @@ def draw_dimension_line(
             label_text,
             ha="left" if offset > 0 else "right",
             va="center",
+            # Keeps each line of a multi-line label centred on the line.
+            multialignment="center",
             fontsize=config.DIMENSION_TEXT_SIZE,
             color=config.DIMENSION_COLOR,
             rotation=90,

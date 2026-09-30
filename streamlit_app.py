@@ -1342,6 +1342,25 @@ def render_section_form(machine_type: str, lift_type: str) -> None:
                       type="primary" if lowest_floor == name else "secondary",
                       on_click=_write_section, args=(lowest_field, name))
 
+    average_field = f"{lift_type}_average_floor_height"
+    a1, _ = st.columns(2)
+    with a1:
+        average_key = f"section_{average_field}"
+        average_wkey = _wk(average_key)
+
+        def _cb_average_floor_height():
+            if average_wkey not in st.session_state:
+                return  # stale event from a previous widget revision
+            _write_section(average_field, st.session_state[average_wkey])
+
+        _num(average_key, "Average Floor Height (mm)", seed=S.get(average_field),
+             min_value=ss.AVERAGE_FLOOR_HEIGHT_BOUNDS[0],
+             max_value=ss.AVERAGE_FLOOR_HEIGHT_BOUNDS[1], step=50,
+             on_change=_cb_average_floor_height,
+             help="Shown under the Travel dimension. Leave blank to use travel ÷ "
+                  "(number of floors − 1), counted from the lowest floor to the "
+                  "top floor.")
+
 
 # =============================================================================
 # Section source lift — port of resolveSectionLift / selectSectionLift
@@ -2373,8 +2392,10 @@ def _clear_all() -> None:
         # Floor labels are optional, so blank means None / "" rather than NaN.
         "passenger_top_floor_number": None,
         "passenger_lowest_floor_name": "",
+        "passenger_average_floor_height": None,
         "fire_top_floor_number": None,
         "fire_lowest_floor_name": "",
+        "fire_average_floor_height": None,
     }
     set_config({**cfg, "cores": cores, "section": section})
     st.session_state["plan_error"] = None

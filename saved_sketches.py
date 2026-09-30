@@ -350,9 +350,7 @@ def _validate_section(section: Any) -> None:
             continue
         _expect_positive_number(value, field_path)
     for field in floor_fields:
-        value = section[field]
-        err = (ss.top_floor_error(value) if field.endswith("_top_floor_number")
-               else ss.lowest_floor_error(value))
+        err = ss.floor_label_error(field, section[field])
         if err:
             raise SavedSketchError(f"{path}.{field} {err}.")
 

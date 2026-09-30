@@ -15,10 +15,10 @@ def _config():
 
 def test_default_section_has_blank_floor_labels():
     section = ss.make_default_section()
-    assert section["passenger_top_floor_number"] is None
-    assert section["passenger_lowest_floor_name"] == ""
-    assert section["fire_top_floor_number"] is None
-    assert section["fire_lowest_floor_name"] == ""
+    for lift_type in ("passenger", "fire"):
+        assert section[f"{lift_type}_top_floor_number"] is None
+        assert section[f"{lift_type}_lowest_floor_name"] == ""
+        assert section[f"{lift_type}_average_floor_height"] is None
 
 
 def test_section_floor_labels_picks_the_lift_types_pair():
@@ -29,15 +29,33 @@ def test_section_floor_labels_picks_the_lift_types_pair():
         "fire_top_floor_number": 26,
         "fire_lowest_floor_name": "B2",
     }
+    section["fire_average_floor_height"] = 3500
     assert ss.section_floor_labels(section, "fire") == {
         "top_floor_number": 26,
         "lowest_floor_name": "B2",
+        "average_floor_height": 3500,
     }
-    # Older configs without the keys → generic labels.
+    # Older configs without the keys → generic labels, auto average.
     assert ss.section_floor_labels({}, "passenger") == {
         "top_floor_number": None,
         "lowest_floor_name": "",
+        "average_floor_height": None,
     }
+
+
+def test_set_floor_labels_sets_and_clears_the_average_floor_height():
+    config, results = dops.apply_operations(_config(), [
+        {"op": "set_floor_labels", "lift_type": "fire", "average_floor_height": 3450},
+    ])
+    assert results[0]["status"] == "applied"
+    assert config["section"]["fire_average_floor_height"] == 3450
+    assert config["section"]["passenger_average_floor_height"] is None
+
+    config, results = dops.apply_operations(config, [
+        {"op": "set_floor_labels", "average_floor_height": None},
+    ])
+    assert results[0]["status"] == "applied"
+    assert config["section"]["fire_average_floor_height"] is None
 
 
 def test_set_floor_labels_without_lift_type_sets_both_types():
@@ -80,6 +98,7 @@ def test_set_floor_labels_rejects_bad_values_without_changing_config():
         {"op": "set_floor_labels", "top_floor_number": 1},
         {"op": "set_floor_labels", "top_floor_number": 12.5},
         {"op": "set_floor_labels", "lowest_floor_name": "Lower Basement 3"},
+        {"op": "set_floor_labels", "average_floor_height": 500},
         {"op": "set_floor_labels", "lift_type": "fire"},
         {"op": "set_floor_labels", "lift_type": "service", "top_floor_number": 5},
     ):

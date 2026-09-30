@@ -234,11 +234,14 @@ def make_default_section() -> dict:
         "door_height": 2100,
         "structural_opening_height": 2200,
         "machine_room_height": 3000,
-        # Landing labels, one pair per lift type (blank = generic labels).
+        # Floor labels, one set per lift type (blank = generic labels; a blank
+        # average floor height is calculated from travel and the floors).
         "passenger_top_floor_number": None,
         "passenger_lowest_floor_name": "",
+        "passenger_average_floor_height": None,
         "fire_top_floor_number": None,
         "fire_lowest_floor_name": "",
+        "fire_average_floor_height": None,
     }
 
 
@@ -246,9 +249,12 @@ def make_default_section() -> dict:
 
 FLOOR_LABEL_KEYS = frozenset([
     "passenger_top_floor_number", "passenger_lowest_floor_name",
+    "passenger_average_floor_height",
     "fire_top_floor_number", "fire_lowest_floor_name",
+    "fire_average_floor_height",
 ])
 TOP_FLOOR_BOUNDS = (2, 250)
+AVERAGE_FLOOR_HEIGHT_BOUNDS = (1000, 20000)
 FLOOR_NAME_MAX_LENGTH = 12
 # Quick picks for a section's lowest floor name.
 LOWEST_FLOOR_PRESETS = ("G", "LG", "B", "B1", "B2", "B3")
@@ -275,12 +281,28 @@ def lowest_floor_error(value):
     return None
 
 
+def average_floor_height_error(value):
+    """None (auto) or mm within AVERAGE_FLOOR_HEIGHT_BOUNDS; error message or None."""
+    lo, hi = AVERAGE_FLOOR_HEIGHT_BOUNDS
+    return _check_bounds(value, lo, hi, nullable=True)
+
+
+def floor_label_error(field: str, value):
+    """Validate one FLOOR_LABEL_KEYS field; error message or None."""
+    if field.endswith("_top_floor_number"):
+        return top_floor_error(value)
+    if field.endswith("_average_floor_height"):
+        return average_floor_height_error(value)
+    return lowest_floor_error(value)
+
+
 def section_floor_labels(section: dict, lift_type: str) -> dict:
-    """SectionConfig landing-label kwargs for one lift type's section. Port of
+    """SectionConfig floor-label kwargs for one lift type's section. Port of
     sketch_generator_task.section_floor_labels."""
     return {
         "top_floor_number": section.get(f"{lift_type}_top_floor_number"),
         "lowest_floor_name": section.get(f"{lift_type}_lowest_floor_name") or "",
+        "average_floor_height": section.get(f"{lift_type}_average_floor_height"),
     }
 
 

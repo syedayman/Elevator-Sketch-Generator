@@ -75,6 +75,9 @@ class SectionConfig:
     # bottom landing, and the landing above it follows (see floor_above).
     top_floor_number: Optional[int] = None
     lowest_floor_name: str = ""
+    # Shown under the Travel dimension. Blank → travel / (floors - 1) from the
+    # named top and lowest floors (see floor_level).
+    average_floor_height: Optional[float] = None
 
     @property
     def total_shaft_height(self) -> float:
@@ -90,6 +93,24 @@ class SectionConfig:
 _INTEGER_FLOOR = re.compile(r"-?\d+")
 _BASEMENT_FLOOR = re.compile(r"(b(?:asement)?)([ -]?)(\d*)", re.IGNORECASE)
 _NUMBERED_FLOOR = re.compile(r"(.*?)(\d+)")
+_GROUND_FLOOR = re.compile(r"g|gf|ug|ground(?: floor)?", re.IGNORECASE)
+
+
+def floor_level(name: str) -> Optional[int]:
+    """Level of a named floor counted from ground (G = 0, B2 = -2, 7 = 7), or
+    None when the name can't be placed relative to ground (e.g. P1, M)."""
+    name = name.strip()
+    if _INTEGER_FLOOR.fullmatch(name):
+        return int(name)
+    basement = _BASEMENT_FLOOR.fullmatch(name)
+    if basement:
+        digits = basement.group(3)
+        return -(int(digits) if digits else 1)
+    if name.upper() in ("LG", "LOWER GROUND"):
+        return -1
+    if _GROUND_FLOOR.fullmatch(name):
+        return 0
+    return None
 
 
 def floor_above(name: str) -> str:
@@ -203,6 +224,7 @@ class LiftSectionSketch:
         top_floor = self.section_config.top_floor_number
         self.top_floor_number = None if top_floor is None else int(top_floor)
         self.lowest_floor_name = (self.section_config.lowest_floor_name or "").strip()
+        self.average_floor_height = self.section_config.average_floor_height
 
         # Calculate geometry
         self._calculate_geometry()
@@ -853,6 +875,18 @@ class LiftSectionSketch:
             below_top, top = "Floor n-1 F.F.L.", "Top Floor F.F.L."
         return bottom, second, below_top, top
 
+    def _average_floor_height(self) -> Optional[float]:
+        """The entered average floor height, else travel / (floors - 1) from
+        the named top and lowest floors; None when neither is known."""
+        if self.average_floor_height is not None:
+            return self.average_floor_height
+        if self.top_floor_number is None or not self.lowest_floor_name:
+            return None
+        lowest = floor_level(self.lowest_floor_name)
+        if lowest is None or self.top_floor_number <= lowest:
+            return None
+        return self.travel_height / (self.top_floor_number - lowest)
+
     def _draw_section_dimensions(
         self,
         ax: plt.Axes,
@@ -938,11 +972,15 @@ class LiftSectionSketch:
 
         # Travel (from ground floor slab top to top floor slab top)
         # Use actual travel_height from config (visual positions are compressed by break lines)
+        travel_text = f"Travel {int(self.travel_height)} mm"
+        average = self._average_floor_height()
+        if average is not None:
+            travel_text += f"\nAverage Floor Height {average:.0f} mm"
         draw_dimension_line(
             ax,
             start=(0, ground_floor_slab_y),
             end=(0, top_level),
-            text=f"Travel {int(self.travel_height)}",
+            text=travel_text,
             offset=overall_dimension_offset,
             orientation="vertical",
         )

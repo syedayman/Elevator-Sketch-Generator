@@ -43,6 +43,7 @@ from sketch_state import (
     clamp_dimension_font_scale,
     compute_default_separator_types,
     fill_blank_lift_ids,
+    average_floor_height_error,
     lift_error,
     lowest_floor_error,
     make_default_core,
@@ -576,19 +577,23 @@ def apply_operations(cfg: dict, ops: list, active_core: int = 0):
 
             elif name == "set_floor_labels":
                 # lift_type omitted → both passenger and fire sections; a null
-                # top floor / "" lowest floor clears back to the generic labels.
+                # top floor / "" lowest floor clears back to the generic labels,
+                # a null average floor height back to the auto calculation.
                 lift_type = op.get("lift_type")
                 has_top = "top_floor_number" in op
                 has_lowest = "lowest_floor_name" in op
+                has_average = "average_floor_height" in op
                 if lift_type not in (None, "passenger", "fire"):
                     results.append(_rejected(op, "Malformed operation."))
                     continue
-                if not has_top and not has_lowest:
+                if not (has_top or has_lowest or has_average):
                     results.append(_rejected(
-                        op, "Give a top floor number or a lowest floor name."))
+                        op, "Give a top floor number, a lowest floor name or an "
+                            "average floor height."))
                     continue
                 top = op.get("top_floor_number")
                 lowest = op.get("lowest_floor_name")
+                average = op.get("average_floor_height")
                 err = has_top and top_floor_error(top)
                 if err:
                     results.append(_rejected(op, f"top floor number: {err}"))
@@ -597,6 +602,10 @@ def apply_operations(cfg: dict, ops: list, active_core: int = 0):
                 if err:
                     results.append(_rejected(op, f"lowest floor: {err}"))
                     continue
+                err = has_average and average_floor_height_error(average)
+                if err:
+                    results.append(_rejected(op, f"average floor height: {err}"))
+                    continue
                 types = [lift_type] if lift_type else ["passenger", "fire"]
                 section = dict(working["section"])
                 for t in types:
@@ -604,6 +613,8 @@ def apply_operations(cfg: dict, ops: list, active_core: int = 0):
                         section[f"{t}_top_floor_number"] = None if top is None else int(top)
                     if has_lowest:
                         section[f"{t}_lowest_floor_name"] = lowest.strip()
+                    if has_average:
+                        section[f"{t}_average_floor_height"] = average
                 working = {**working, "section": section}
                 changes = []
                 if has_top:
@@ -611,6 +622,9 @@ def apply_operations(cfg: dict, ops: list, active_core: int = 0):
                 if has_lowest:
                     changes.append(f"lowest floor {lowest.strip()}" if lowest.strip()
                                    else "lowest floor cleared")
+                if has_average:
+                    changes.append("average floor height set to auto" if average is None
+                                   else f"average floor height {average:g} mm")
                 results.append(_applied(
                     op, f"Set {' and '.join(types)} floor labels: {', '.join(changes)}."))
 
