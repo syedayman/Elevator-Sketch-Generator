@@ -25,7 +25,13 @@ import debbie_operations as dops
 import saved_sketch_store as saved_store
 import saved_sketches as saved
 import sketch_state as ss
-from section_sketch import LiftSectionSketch, SectionConfig
+from section_sketch import (
+    LiftSectionSketch,
+    SectionConfig,
+    calculated_floor_height,
+    parse_floors,
+    served_floors,
+)
 from shaft_sketch import LiftConfig, LiftShaftSketch, FIRE_LIFT_CABIN_SIZES
 
 # Brand assets (sidebar logo + display font), inlined as base64 data URIs.
@@ -1296,53 +1302,75 @@ def render_section_form(machine_type: str, lift_type: str) -> None:
                 seed=S.get("machine_room_height") if S.get("machine_room_height") is not None
                 else 3000)
 
-    # Landing labels for this lift type; blank keeps the generic labels.
-    top_field = f"{lift_type}_top_floor_number"
-    lowest_field = f"{lift_type}_lowest_floor_name"
-    lowest_floor = (S.get(lowest_field) or "").strip()
-
+    # Floor labels: the building's floors (shared by every lift), then this
+    # lift type's bottom / top floor; blank floors keep the generic labels.
     def _write_section(field, value):
         c = st.session_state["config"]
         set_config({**c, "section": {**c["section"], field: value}})
 
+    floors_text = S.get("floors") or ""
+    floors, unreadable = parse_floors(floors_text)
+    floors_wkey = _wk("section_floors")
+    if floors_wkey not in st.session_state:
+        st.session_state[floors_wkey] = floors_text
+
+    def _cb_floors():
+        if floors_wkey not in st.session_state:
+            return  # stale event from a previous widget revision
+        _write_section("floors", st.session_state[floors_wkey].strip())
+
+    st.text_input(
+        "Building Floors", key=floors_wkey, max_chars=ss.FLOORS_MAX_LENGTH,
+        placeholder="e.g. B2, B1, G, 1-25, Roof", on_change=_cb_floors,
+        help="Every floor of the building, separated by commas, in any order. "
+             "Ranges work too (1-25, B1-B3, P1-P4). Codes: B1, LG, G, UG, M, P1, "
+             "1, 2, …, Roof. Press Enter (or click outside the box) to apply.")
+    if floors:
+        st.caption(f"{len(floors)} floors, bottom to top: {ss.format_floors(floors)}")
+    if unreadable:
+        st.warning(f"Couldn't read: {', '.join(unreadable)}")
+
     st.caption(f"{'Fire' if lift_type == 'fire' else 'Passenger'} lift floor labels")
-    f1, f2 = st.columns(2)
-    with f1:
-        top_key = f"section_{top_field}"
-        top_wkey = _wk(top_key)
+    bottom_field = f"{lift_type}_bottom_floor"
+    top_field = f"{lift_type}_top_floor"
+    served = served_floors(floors, S.get(bottom_field) or "", S.get(top_field) or "")
+    b1, b2 = st.columns(2)
+    if floors:
+        low, high = floors.index(served[0]), floors.index(served[-1])
 
-        def _cb_top_floor():
-            if top_wkey not in st.session_state:
-                return  # stale event from a previous widget revision
-            raw = st.session_state[top_wkey]
-            _write_section(top_field, None if raw is None else int(raw))
+        def _floor_select(field, label, options, value):
+            wkey = _wk(f"section_{field}")
+            if wkey not in st.session_state:
+                st.session_state[wkey] = value
 
-        _num(top_key, "Top Floor Number", seed=S.get(top_field),
-             min_value=ss.TOP_FLOOR_BOUNDS[0], max_value=ss.TOP_FLOOR_BOUNDS[1],
-             on_change=_cb_top_floor,
-             help="The top landing reads Floor N F.F.L. and the one below it "
-                  "Floor N-1 F.F.L. Leave blank for the generic Top Floor label.")
-    with f2:
-        lowest_wkey = _wk(f"section_{lowest_field}")
-        if lowest_wkey not in st.session_state:
-            st.session_state[lowest_wkey] = lowest_floor
+            def cb():
+                if wkey not in st.session_state:
+                    return  # stale event from a previous widget revision
+                _write_section(field, st.session_state[wkey])
 
-        def _cb_lowest_floor():
-            if lowest_wkey not in st.session_state:
-                return  # stale event from a previous widget revision
-            _write_section(lowest_field, st.session_state[lowest_wkey].strip())
+            st.selectbox(label, options=options, key=wkey, on_change=cb)
 
-        st.text_input("Lowest Floor", key=lowest_wkey, placeholder="e.g. G or B2",
-                      max_chars=ss.FLOOR_NAME_MAX_LENGTH, on_change=_cb_lowest_floor)
+        # Each list stops at the other choice, so bottom stays below top.
+        with b1:
+            _floor_select(bottom_field, "Bottom Floor", floors[:high + 1], served[0])
+        with b2:
+            _floor_select(top_field, "Top Floor", floors[low:], served[-1])
+    else:
+        # Shown greyed out so it's clear where the choices will appear.
+        for column, field, label in ((b1, bottom_field, "Bottom Floor"),
+                                     (b2, top_field, "Top Floor")):
+            with column:
+                st.selectbox(label, options=[], index=None, disabled=True,
+                             placeholder="Enter the building floors first",
+                             key=_wk(f"section_{field}_empty"))
 
-    for col, name in zip(st.columns(len(ss.LOWEST_FLOOR_PRESETS)),
-                         ss.LOWEST_FLOOR_PRESETS):
-        with col:
-            st.button(name, key=_wk(f"section_lowest_{name}"), width="stretch",
-                      type="primary" if lowest_floor == name else "secondary",
-                      on_click=_write_section, args=(lowest_field, name))
-
+    # Average floor height: the value typed by hand, else the calculated
+    # travel / (floors - 1). A button returns a typed value to the calculation.
     average_field = f"{lift_type}_average_floor_height"
+    entered_average = S.get(average_field)
+    travel = S.get("travel_height")
+    calculated = (None if ss.is_blank(travel)
+                  else calculated_floor_height(travel, served))
     a1, _ = st.columns(2)
     with a1:
         average_key = f"section_{average_field}"
@@ -1353,13 +1381,23 @@ def render_section_form(machine_type: str, lift_type: str) -> None:
                 return  # stale event from a previous widget revision
             _write_section(average_field, st.session_state[average_wkey])
 
-        _num(average_key, "Average Floor Height (mm)", seed=S.get(average_field),
-             min_value=ss.AVERAGE_FLOOR_HEIGHT_BOUNDS[0],
-             max_value=ss.AVERAGE_FLOOR_HEIGHT_BOUNDS[1], step=50,
+        _num(average_key, "Average Floor Height (mm)", step=50, min_value=1,
+             seed=entered_average if entered_average is not None
+             else (round(calculated) if calculated is not None else None),
              on_change=_cb_average_floor_height,
-             help="Shown under the Travel dimension. Leave blank to use travel ÷ "
-                  "(number of floors − 1), counted from the lowest floor to the "
-                  "top floor.")
+             help="Shown under the Travel dimension. Filled in as travel ÷ "
+                  "(number of floors − 1), counting the floors from the bottom "
+                  "floor to the top floor. Type a value to override it.")
+        if entered_average is None:
+            if calculated is not None:
+                st.caption(f"Calculated: {travel:,.0f} ÷ ({len(served)} floors − 1)")
+        else:
+            st.caption("Entered by hand.")
+            st.button(
+                f"Use calculated ({round(calculated):,} mm)"
+                if calculated is not None else "Clear",
+                key=_wk(f"{average_key}_reset"), width="stretch",
+                on_click=_write_section, args=(average_field, None))
 
 
 # =============================================================================
@@ -2390,11 +2428,12 @@ def _clear_all() -> None:
     section = {
         **ss.blank_numeric_fields(cfg["section"]),
         # Floor labels are optional, so blank means None / "" rather than NaN.
-        "passenger_top_floor_number": None,
-        "passenger_lowest_floor_name": "",
+        "floors": "",
+        "passenger_bottom_floor": "",
+        "passenger_top_floor": "",
         "passenger_average_floor_height": None,
-        "fire_top_floor_number": None,
-        "fire_lowest_floor_name": "",
+        "fire_bottom_floor": "",
+        "fire_top_floor": "",
         "fire_average_floor_height": None,
     }
     set_config({**cfg, "cores": cores, "section": section})

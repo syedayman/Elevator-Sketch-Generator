@@ -160,17 +160,18 @@ GLOBAL / SECTION:
 - set_section_field {field, value}  — field is one of: shaft_depth, wall_thickness,
   pit_slab, pit_depth, travel_height, overhead_clearance, door_height,
   structural_opening_height, machine_room_height
-- set_floor_labels {lift_type?, top_floor_number?, lowest_floor_name?,
-  average_floor_height?}  — lift_type is "passenger" or "fire". Floor names \
-beside the section's landings. top_floor_number N (whole number 2-250) labels \
-the top landing "Floor N" and the one below "Floor N-1"; \
-lowest_floor_name (short text, e.g. "G", "B2", "LG") labels the bottom landing and \
-the landing above it follows automatically (B2 → B1, B → G, G → 1). \
-average_floor_height (mm, 1000-20000) is shown under the Travel dimension; when \
-blank the app works it out as travel / (floors - 1). Passenger and fire \
-sections each keep their own set: lift_type omitted sets BOTH. null / "" clears \
-back to the generic label (auto for average_floor_height). Send only the parts \
-the user gave.
+- set_floor_labels {lift_type?, floors?, bottom_floor?, top_floor?,
+  average_floor_height?}  — floor names beside the section's landings. \
+floors = EVERY floor of the building as comma-separated codes and ranges, in any \
+order, e.g. "B2, B1, G, 1-25, Roof" (codes: B1, B2…, LG, G, UG, M, P1…, 1, 2…, \
+Roof; ranges like 1-25, B1-B3, P1-P4); floors is shared by all lifts. \
+bottom_floor / top_floor pick, from those floors, the lowest and highest \
+landing this lift type serves ("" = lowest / highest floor). \
+average_floor_height (mm, positive) is shown under the Travel dimension; when \
+blank the app works it out as travel / (floors served - 1). lift_type \
+("passenger" or "fire") applies to bottom_floor, top_floor and \
+average_floor_height: omitted sets BOTH. null / "" resets a value. Send only the \
+parts the user gave.
 
 FIELD VOCABULARY — consult ONLY when the message itself doesn't name the field:
 - "clearance": running clearance = door_gap; headroom = overhead_clearance; \
@@ -260,8 +261,9 @@ TOOLS: List[Dict[str, Any]] = [
                                 "core": {},
                                 "bank": {"type": "string"},
                                 "lift_type": {"type": "string"},
-                                "top_floor_number": {},
-                                "lowest_floor_name": {"type": "string"},
+                                "floors": {"type": "string"},
+                                "bottom_floor": {"type": "string"},
+                                "top_floor": {"type": "string"},
                                 "average_floor_height": {},
                             },
                             "required": ["op"],

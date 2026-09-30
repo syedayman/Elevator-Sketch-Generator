@@ -44,14 +44,14 @@ from sketch_state import (
     compute_default_separator_types,
     fill_blank_lift_ids,
     average_floor_height_error,
+    floor_label_error,
     lift_error,
-    lowest_floor_error,
     make_default_core,
     make_default_lift,
     plan_dimension_font_max,
     section_error,
-    top_floor_error,
 )
+from section_sketch import parse_floors
 
 # ── Operation vocabulary (mirror of debbie-operations.ts) ──
 
@@ -245,6 +245,80 @@ def _applied(op: dict, detail: str) -> dict:
 
 def _is_num(v) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+_FLOOR_LABEL_FIELDS = ("floors", "bottom_floor", "top_floor", "average_floor_height")
+
+
+def _apply_floor_labels(cfg: dict, op: dict):
+    """set_floor_labels: `floors` is the building's floor list (shared by
+    every lift); bottom_floor / top_floor / average_floor_height apply to
+    lift_type (both types when omitted). "" / null resets a value to its default
+    (lowest / highest floor, auto average). Returns (config, detail); raises
+    ValueError with the reason when the op can't be applied."""
+    lift_type = op.get("lift_type")
+    if lift_type not in (None, "passenger", "fire"):
+        raise ValueError("Malformed operation.")
+    given = [key for key in _FLOOR_LABEL_FIELDS if key in op]
+    if not given:
+        raise ValueError(
+            "Give the floors, a bottom or top floor, or an average floor height.")
+
+    section = dict(cfg["section"])
+    changes = []
+    if "floors" in op:
+        text = op["floors"]
+        err = floor_label_error("floors", text)
+        if err:
+            raise ValueError(f"floors: {err}")
+        unreadable = parse_floors(text)[1]
+        if unreadable:
+            raise ValueError(f"floors: couldn't read {', '.join(unreadable)}")
+        section["floors"] = text.strip()
+        changes.append(f"floors {section['floors']}" if section["floors"] else "floors cleared")
+
+    floors = parse_floors(section.get("floors") or "")[0]
+    choices = {}
+    for key in ("bottom_floor", "top_floor"):
+        if key not in op:
+            continue
+        value = op[key]
+        if not isinstance(value, str):
+            raise ValueError("Malformed operation.")
+        if not value.strip():
+            choices[key] = ""
+            continue
+        named = parse_floors(value)[0]
+        if len(named) != 1 or named[0] not in floors:
+            raise ValueError(
+                f"{key.replace('_', ' ')}: {value} isn't one of the building floors.")
+        choices[key] = named[0]
+
+    average = op.get("average_floor_height")
+    if "average_floor_height" in op:
+        err = average_floor_height_error(average)
+        if err:
+            raise ValueError(f"average floor height: {err}")
+
+    types = [lift_type] if lift_type else ["passenger", "fire"]
+    for t in types:
+        for key, value in choices.items():
+            section[f"{t}_{key}"] = value
+        bottom = section.get(f"{t}_bottom_floor") or ""
+        top = section.get(f"{t}_top_floor") or ""
+        if bottom in floors and top in floors and floors.index(bottom) > floors.index(top):
+            raise ValueError(f"{t} bottom floor {bottom} is above its top floor {top}.")
+        if "average_floor_height" in op:
+            section[f"{t}_average_floor_height"] = average
+
+    for key, value in choices.items():
+        changes.append(f"{key.replace('_', ' ')} {value}" if value
+                       else f"{key.replace('_', ' ')} reset")
+    if "average_floor_height" in op:
+        changes.append("average floor height set to auto" if average is None
+                       else f"average floor height {average:g} mm")
+    who = " and ".join(types)
+    return {**cfg, "section": section}, f"Set {who} floor labels: {', '.join(changes)}."
 
 
 # ── Main entry point ──
@@ -576,57 +650,12 @@ def apply_operations(cfg: dict, ops: list, active_core: int = 0):
                 results.append(_applied(op, f"Set section {field} = {value}."))
 
             elif name == "set_floor_labels":
-                # lift_type omitted → both passenger and fire sections; a null
-                # top floor / "" lowest floor clears back to the generic labels,
-                # a null average floor height back to the auto calculation.
-                lift_type = op.get("lift_type")
-                has_top = "top_floor_number" in op
-                has_lowest = "lowest_floor_name" in op
-                has_average = "average_floor_height" in op
-                if lift_type not in (None, "passenger", "fire"):
-                    results.append(_rejected(op, "Malformed operation."))
+                try:
+                    working, detail = _apply_floor_labels(working, op)
+                except ValueError as e:
+                    results.append(_rejected(op, str(e)))
                     continue
-                if not (has_top or has_lowest or has_average):
-                    results.append(_rejected(
-                        op, "Give a top floor number, a lowest floor name or an "
-                            "average floor height."))
-                    continue
-                top = op.get("top_floor_number")
-                lowest = op.get("lowest_floor_name")
-                average = op.get("average_floor_height")
-                err = has_top and top_floor_error(top)
-                if err:
-                    results.append(_rejected(op, f"top floor number: {err}"))
-                    continue
-                err = has_lowest and lowest_floor_error(lowest)
-                if err:
-                    results.append(_rejected(op, f"lowest floor: {err}"))
-                    continue
-                err = has_average and average_floor_height_error(average)
-                if err:
-                    results.append(_rejected(op, f"average floor height: {err}"))
-                    continue
-                types = [lift_type] if lift_type else ["passenger", "fire"]
-                section = dict(working["section"])
-                for t in types:
-                    if has_top:
-                        section[f"{t}_top_floor_number"] = None if top is None else int(top)
-                    if has_lowest:
-                        section[f"{t}_lowest_floor_name"] = lowest.strip()
-                    if has_average:
-                        section[f"{t}_average_floor_height"] = average
-                working = {**working, "section": section}
-                changes = []
-                if has_top:
-                    changes.append("top floor cleared" if top is None else f"top floor {int(top)}")
-                if has_lowest:
-                    changes.append(f"lowest floor {lowest.strip()}" if lowest.strip()
-                                   else "lowest floor cleared")
-                if has_average:
-                    changes.append("average floor height set to auto" if average is None
-                                   else f"average floor height {average:g} mm")
-                results.append(_applied(
-                    op, f"Set {' and '.join(types)} floor labels: {', '.join(changes)}."))
+                results.append(_applied(op, detail))
 
             elif name == "set_lift_id":
                 targets = _resolve_lift_targets(working, op.get("target") or {})

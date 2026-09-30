@@ -7,7 +7,6 @@ Complements the plan sketch (top-down view) in shaft_sketch.py.
 
 import io
 import re
-import textwrap
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -70,13 +69,13 @@ class SectionConfig:
     # MRA (Machine Room Above) parameters
     machine_room_height: float = field(default_factory=lambda: config.DEFAULT_MACHINE_ROOM_HEIGHT)
 
-    # Landing labels. Blank keeps the generic wording. top_floor_number N names
-    # the top two landings Floor N / Floor N-1; lowest_floor_name names the
-    # bottom landing, and the landing above it follows (see floor_above).
-    top_floor_number: Optional[int] = None
-    lowest_floor_name: str = ""
-    # Shown under the Travel dimension. Blank → travel / (floors - 1) from the
-    # named top and lowest floors (see floor_level).
+    # Landing labels. `floors` lists every building floor as codes and ranges
+    # (see parse_floors); the lift serves bottom_floor up to top_floor (blank →
+    # lowest / highest). Blank floors keep the generic wording.
+    floors: str = ""
+    bottom_floor: str = ""
+    top_floor: str = ""
+    # Shown under the Travel dimension. Blank → travel / (served floors - 1).
     average_floor_height: Optional[float] = None
 
     @property
@@ -90,62 +89,110 @@ class SectionConfig:
         return max(2, int(self.travel_height / self.floor_height) + 1)
 
 
-_INTEGER_FLOOR = re.compile(r"-?\d+")
-_BASEMENT_FLOOR = re.compile(r"(b(?:asement)?)([ -]?)(\d*)", re.IGNORECASE)
-_NUMBERED_FLOOR = re.compile(r"(.*?)(\d+)")
-_GROUND_FLOOR = re.compile(r"g|gf|ug|ground(?: floor)?", re.IGNORECASE)
+# Most floors a building list may expand to (guards "1-100000" typos).
+MAX_FLOORS = 300
+
+_NUMBERED_CODE = re.compile(r"([A-Z]*)(\d+)")
+_FLOOR_RANGE = re.compile(r"(.+?)\s*(?:-|–|—|\bto\b)\s*(.+)", re.IGNORECASE)
 
 
-def floor_level(name: str) -> Optional[int]:
-    """Level of a named floor counted from ground (G = 0, B2 = -2, 7 = 7), or
-    None when the name can't be placed relative to ground (e.g. P1, M)."""
-    name = name.strip()
-    if _INTEGER_FLOOR.fullmatch(name):
-        return int(name)
-    basement = _BASEMENT_FLOOR.fullmatch(name)
-    if basement:
-        digits = basement.group(3)
-        return -(int(digits) if digits else 1)
-    if name.upper() in ("LG", "LOWER GROUND"):
-        return -1
-    if _GROUND_FLOOR.fullmatch(name):
-        return 0
+def _floor_code(token: str) -> Optional[tuple[str, float]]:
+    """Canonical name and bottom-to-top rank of one floor ("b2" → ("B2", -2)),
+    or None when the token isn't a known floor code.
+
+    Order: basements < LG < G < UG < mezzanines < podiums < numbered floors
+    < roof, i.e. the "2B+G+M+4P+30+R" building notation.
+    """
+    text = " ".join(token.split()).lower()
+    text = re.sub(r"^(?:level|floor|lvl)\s+", "", text)
+    if match := re.fullmatch(r"(?:b|basement)\s*(\d+)?", text):
+        number = int(match.group(1)) if match.group(1) else None
+        return (f"B{number}" if number is not None else "B"), -(number or 1)
+    if re.fullmatch(r"lg|lower ground(?: floor)?", text):
+        return "LG", -0.5
+    if re.fullmatch(r"g|gf|ground(?: floor)?", text):
+        return "G", 0
+    if re.fullmatch(r"ug|upper ground(?: floor)?", text):
+        return "UG", 0.1
+    if match := re.fullmatch(r"(?:m|mezz|mezzanine)\s*(\d+)?", text):
+        number = int(match.group(1)) if match.group(1) else None
+        return (f"M{number}" if number is not None else "M"), 0.2 + (number or 0) / 1000
+    if match := re.fullmatch(r"(?:p|podium)\s*(\d+)?", text):
+        number = int(match.group(1)) if match.group(1) else None
+        return (f"P{number}" if number is not None else "P"), 0.5 + (number or 0) / 1000
+    if match := re.fullmatch(r"l?(\d+)", text):
+        return str(int(match.group(1))), int(match.group(1))
+    if re.fullmatch(r"r|rf|roof(?: floor)?", text):
+        return "Roof", 100_000
     return None
 
 
-def floor_above(name: str) -> str:
-    """Name of the landing directly above the landing called `name`.
+def _floor_range(start: str, end: str) -> Optional[list[tuple[str, float]]]:
+    """Expand a same-kind range ("1-5", "B1-B3", "B1-3", "P1-P4"), or None."""
+    first = _floor_code(start)
+    if first is None or not (match := _NUMBERED_CODE.fullmatch(first[0])):
+        return None
+    prefix, low = match.group(1), int(match.group(2))
+    if end.strip().isdigit():
+        end = prefix + end.strip()  # "B1-3" → B1 to B3
+    last = _floor_code(end)
+    last_match = _NUMBERED_CODE.fullmatch(last[0]) if last else None
+    if last_match is None or last_match.group(1) != prefix:
+        return None
+    low, high = sorted((low, int(last_match.group(2))))
+    if high - low >= MAX_FLOORS:
+        return None
+    return [_floor_code(f"{prefix}{number}") for number in range(low, high + 1)]
 
-    Basements count up towards ground (B2 -> B1, B / B1 -> G), lower ground
-    sits below ground (LG -> G), other numbered floors count up (5 -> 6,
-    P1 -> P2), and any other name is followed by Floor 1 (G -> 1).
+
+def parse_floors(text: str) -> tuple[list[str], list[str]]:
+    """Read a building's floors typed as comma-separated codes and ranges,
+    e.g. "g, b1, b2, 1-5" or "B2, B1, G, P1-P4, 1-25, Roof".
+
+    Returns the floors ordered bottom to top without duplicates, and the
+    tokens that couldn't be read.
     """
-    name = name.strip()
-    if _INTEGER_FLOOR.fullmatch(name):
-        return str(int(name) + 1)
-    basement = _BASEMENT_FLOOR.fullmatch(name)
-    if basement:
-        prefix, separator, digits = basement.groups()
-        level = int(digits) if digits else 1
-        if level <= 1:
-            return "G"
-        return f"{prefix}{separator}{str(level - 1).zfill(len(digits))}"
-    if name.upper() in ("LG", "LOWER GROUND"):
-        return "G"
-    numbered = _NUMBERED_FLOOR.fullmatch(name)
-    if numbered:
-        prefix, digits = numbered.groups()
-        return f"{prefix}{str(int(digits) + 1).zfill(len(digits))}"
-    return "1"
+    ranks: dict[str, float] = {}
+    unreadable: list[str] = []
+    for token in re.split(r"[,;\n]+", text or ""):
+        token = token.strip()
+        if not token:
+            continue
+        code = _floor_code(token)
+        range_match = None if code else _FLOOR_RANGE.fullmatch(token)
+        codes = [code] if code else (
+            _floor_range(*range_match.groups()) if range_match else None
+        )
+        if not codes or len(ranks) + len(codes) > MAX_FLOORS:
+            unreadable.append(token)
+            continue
+        for name, rank in codes:
+            ranks.setdefault(name, rank)
+    return sorted(ranks, key=ranks.__getitem__), unreadable
+
+
+def served_floors(floors: list[str], bottom: str, top: str) -> list[str]:
+    """The floors from `bottom` up to `top`. A blank choice, or one no longer
+    in the list, means the lowest / highest floor."""
+    if not floors:
+        return []
+    low = floors.index(bottom) if bottom in floors else 0
+    high = floors.index(top) if top in floors else len(floors) - 1
+    low, high = sorted((low, high))
+    return floors[low:high + 1]
+
+
+def calculated_floor_height(travel_height: float, floors: list[str]) -> Optional[float]:
+    """Average floor height of the served floors: travel / (floors - 1), or
+    None with fewer than two floors."""
+    if len(floors) < 2:
+        return None
+    return travel_height / (len(floors) - 1)
 
 
 def _floor_label(name: str) -> str:
-    """Landing label for a named floor, e.g. "Floor B2 F.F.L.".
-
-    Lines wrap at the width of the generic "Floor n-1 F.F.L." so long names
-    stay clear of the vertical dimensions on their left.
-    """
-    return textwrap.fill(f"Floor {name} F.F.L.", width=16)
+    """Landing label for a floor, e.g. "Floor B2 F.F.L." / "Roof F.F.L."."""
+    return "Roof F.F.L." if name == "Roof" else f"Floor {name} F.F.L."
 
 
 class LiftSectionSketch:
@@ -221,9 +268,11 @@ class LiftSectionSketch:
         self.travel_height = self.section_config.travel_height
         self.floor_height = self.section_config.floor_height
         self.car_interior_height = self.section_config.car_interior_height
-        top_floor = self.section_config.top_floor_number
-        self.top_floor_number = None if top_floor is None else int(top_floor)
-        self.lowest_floor_name = (self.section_config.lowest_floor_name or "").strip()
+        self.served_floors = served_floors(
+            parse_floors(self.section_config.floors)[0],
+            self.section_config.bottom_floor,
+            self.section_config.top_floor,
+        )
         self.average_floor_height = self.section_config.average_floor_height
 
         # Calculate geometry
@@ -862,30 +911,28 @@ class LiftSectionSketch:
         return [brief_spec_row(self.lift_config)]
 
     def _landing_labels(self) -> tuple[str, str, str, str]:
-        """Labels of the four drawn landings, bottom to top."""
-        if self.lowest_floor_name:
-            bottom = _floor_label(self.lowest_floor_name)
-            second = _floor_label(floor_above(self.lowest_floor_name))
-        else:
-            bottom, second = "Bottom-most\nLanding FFL", "Floor 1 F.F.L."
-        if self.top_floor_number is not None:
-            below_top = _floor_label(str(self.top_floor_number - 1))
-            top = _floor_label(str(self.top_floor_number))
-        else:
-            below_top, top = "Floor n-1 F.F.L.", "Top Floor F.F.L."
-        return bottom, second, below_top, top
+        """Labels of the four drawn landings, bottom to top: the bottom floor,
+        the floor above it, the floor below the top, and the top floor."""
+        served = self.served_floors
+        if not served:
+            return (
+                "Bottom-most\nLanding FFL",
+                "Floor 1 F.F.L.",
+                "Floor n-1 F.F.L.",
+                "Top Floor F.F.L.",
+            )
+        last = len(served) - 1
+        return tuple(
+            _floor_label(served[index])
+            for index in (0, min(1, last), max(last - 1, 0), last)
+        )
 
     def _average_floor_height(self) -> Optional[float]:
-        """The entered average floor height, else travel / (floors - 1) from
-        the named top and lowest floors; None when neither is known."""
+        """The entered average floor height, else travel / (served floors - 1);
+        None when neither is known."""
         if self.average_floor_height is not None:
             return self.average_floor_height
-        if self.top_floor_number is None or not self.lowest_floor_name:
-            return None
-        lowest = floor_level(self.lowest_floor_name)
-        if lowest is None or self.top_floor_number <= lowest:
-            return None
-        return self.travel_height / (self.top_floor_number - lowest)
+        return calculated_floor_height(self.travel_height, self.served_floors)
 
     def _draw_section_dimensions(
         self,

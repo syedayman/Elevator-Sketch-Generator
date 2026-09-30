@@ -234,76 +234,88 @@ def make_default_section() -> dict:
         "door_height": 2100,
         "structural_opening_height": 2200,
         "machine_room_height": 3000,
-        # Floor labels, one set per lift type (blank = generic labels; a blank
-        # average floor height is calculated from travel and the floors).
-        "passenger_top_floor_number": None,
-        "passenger_lowest_floor_name": "",
+        # Floor labels: every building floor as codes and ranges (shared by
+        # all lifts), then per lift type the bottom / top floor it serves (blank
+        # = lowest / highest) and the average floor height (blank = auto).
+        "floors": "",
+        "passenger_bottom_floor": "",
+        "passenger_top_floor": "",
         "passenger_average_floor_height": None,
-        "fire_top_floor_number": None,
-        "fire_lowest_floor_name": "",
+        "fire_bottom_floor": "",
+        "fire_top_floor": "",
         "fire_average_floor_height": None,
     }
 
 
-# ── Section floor labels (mirror of sectionFormDataSchema) ──
+# ── Section floor labels ──
 
 FLOOR_LABEL_KEYS = frozenset([
-    "passenger_top_floor_number", "passenger_lowest_floor_name",
-    "passenger_average_floor_height",
-    "fire_top_floor_number", "fire_lowest_floor_name",
-    "fire_average_floor_height",
+    "floors",
+    "passenger_bottom_floor", "passenger_top_floor", "passenger_average_floor_height",
+    "fire_bottom_floor", "fire_top_floor", "fire_average_floor_height",
 ])
-TOP_FLOOR_BOUNDS = (2, 250)
-AVERAGE_FLOOR_HEIGHT_BOUNDS = (1000, 20000)
-FLOOR_NAME_MAX_LENGTH = 12
-# Quick picks for a section's lowest floor name.
-LOWEST_FLOOR_PRESETS = ("G", "LG", "B", "B1", "B2", "B3")
+FLOORS_MAX_LENGTH = 300
+FLOOR_CHOICE_MAX_LENGTH = 20
+# Any positive height (mm): the field shows the calculated value, whatever it is.
+AVERAGE_FLOOR_HEIGHT_BOUNDS = (1e-9, None)
 
 
-def top_floor_error(value):
-    """None (blank) or a whole number 2-250; error message or None."""
-    if value is None:
-        return None
-    lo, hi = TOP_FLOOR_BOUNDS
-    if not _is_number(value) or not math.isfinite(value) or value != int(value):
-        return "must be a whole number"
-    if not lo <= value <= hi:
-        return f"must be between {lo} and {hi}"
-    return None
-
-
-def lowest_floor_error(value):
-    """Text of at most FLOOR_NAME_MAX_LENGTH characters; error message or None."""
+def _text_error(value, max_length: int):
     if not isinstance(value, str):
         return "must be text"
-    if len(value.strip()) > FLOOR_NAME_MAX_LENGTH:
-        return f"must be {FLOOR_NAME_MAX_LENGTH} characters or fewer"
+    if len(value) > max_length:
+        return f"must be {max_length} characters or fewer"
     return None
 
 
 def average_floor_height_error(value):
-    """None (auto) or mm within AVERAGE_FLOOR_HEIGHT_BOUNDS; error message or None."""
+    """None (calculated) or a positive height in mm; error message or None."""
     lo, hi = AVERAGE_FLOOR_HEIGHT_BOUNDS
     return _check_bounds(value, lo, hi, nullable=True)
 
 
 def floor_label_error(field: str, value):
     """Validate one FLOOR_LABEL_KEYS field; error message or None."""
-    if field.endswith("_top_floor_number"):
-        return top_floor_error(value)
+    if field == "floors":
+        return _text_error(value, FLOORS_MAX_LENGTH)
     if field.endswith("_average_floor_height"):
         return average_floor_height_error(value)
-    return lowest_floor_error(value)
+    return _text_error(value, FLOOR_CHOICE_MAX_LENGTH)
 
 
 def section_floor_labels(section: dict, lift_type: str) -> dict:
-    """SectionConfig floor-label kwargs for one lift type's section. Port of
-    sketch_generator_task.section_floor_labels."""
+    """SectionConfig floor-label kwargs for one lift type's section."""
     return {
-        "top_floor_number": section.get(f"{lift_type}_top_floor_number"),
-        "lowest_floor_name": section.get(f"{lift_type}_lowest_floor_name") or "",
+        "floors": section.get("floors") or "",
+        "bottom_floor": section.get(f"{lift_type}_bottom_floor") or "",
+        "top_floor": section.get(f"{lift_type}_top_floor") or "",
         "average_floor_height": section.get(f"{lift_type}_average_floor_height"),
     }
+
+
+def format_floors(floors: list) -> str:
+    """Compact display of an ordered floor list: runs of numbered floors
+    collapse to ranges ("B2, B1, G, 1–25, Roof")."""
+    parts, run = [], []
+
+    def flush():
+        if len(run) > 2:
+            parts.append(f"{run[0]}–{run[-1]}")
+        else:
+            parts.extend(run)
+        run.clear()
+
+    for name in floors:
+        if name.isdigit() and run and int(name) == int(run[-1]) + 1:
+            run.append(name)
+            continue
+        flush()
+        if name.isdigit():
+            run.append(name)
+        else:
+            parts.append(name)
+    flush()
+    return ", ".join(parts)
 
 
 def make_default_core(machine_type: str = "mrl", name: str = "Core 1") -> dict:
